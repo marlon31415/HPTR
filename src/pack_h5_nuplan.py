@@ -4,6 +4,7 @@ import sys
 sys.path.append(".")
 
 import os
+import random
 from argparse import ArgumentParser
 from tqdm import tqdm
 import h5py
@@ -89,12 +90,12 @@ N_AGENT_TYPE = len(set(AGENT_TYPES.values()))
 
 N_PL_MAX = 1500
 N_TL_MAX = 40
-N_AGENT_MAX = 300
+N_AGENT_MAX = 500
 
 N_PL = 1024
 N_TL = 200  # due to polyline splitting this value can be higher than N_TL_MAX
-N_AGENT = 300
-N_AGENT_NO_SIM = N_AGENT_MAX - N_AGENT
+N_AGENT = 64
+N_AGENT_NO_SIM = 256
 
 THRESH_MAP = 120
 THRESH_AGENT = 120
@@ -147,12 +148,15 @@ def collate_agent_features(
                 nuplan_type=None,
                 object_id=i + 1,  # small integer ids
                 nuplan_id=id,  # hex ids
+                near_to_ego=False,
+                distance_to_ego=1000,
             ),
         )
         for i, id in enumerate(list(all_obj_ids))
     }
 
     tracks_to_remove = set()
+    dists_to_ego = []
 
     for frame_idx, frame in enumerate(detection_ret):
         for nuplan_id, obj_state in frame.items():
@@ -177,6 +181,18 @@ def collate_agent_features(
             tracks[nuplan_id]["state"]["length"][frame_idx] = state["length"]
             tracks[nuplan_id]["state"]["width"][frame_idx] = state["width"]
             tracks[nuplan_id]["state"]["height"][frame_idx] = state["height"]
+
+            if frame_idx == STEP_CURRENT and tracks[nuplan_id]["type"] < 3:
+                x_pos, y_pos = obj_state.center.x, obj_state.center.y
+                dist_to_ego = np.linalg.norm(np.array([x_pos, y_pos]) - center)
+                dists_to_ego.append(dist_to_ego)
+                tracks[nuplan_id]["metadata"]["distance_to_ego"] = dist_to_ego
+
+    dists_to_ego.sort()
+    if len(dists_to_ego) > N_AGENT - 1:
+        interest_dist = dists_to_ego[N_AGENT - 2]
+    else:  # not enough agents
+        interest_dist = dists_to_ego[-1]
 
     for track in list(tracks_to_remove):
         tracks.pop(track)
@@ -224,15 +240,18 @@ def collate_agent_features(
             continue
         agent_role.append([False, False, False])
         if track["type"] in [0, 1, 2]:
-            agent_role[-1][2] = True
-            agent_role[-1][1] = True
+            agent_role[-1][2] = (
+                True if track["metadata"]["distance_to_ego"] <= interest_dist else False
+            )
+            agent_role[-1][1] = False
         if track["metadata"]["nuplan_type"] == int(NuPlanEgoType):
             agent_role[-1][0] = True
+            agent_role[-1][1] = True
+            agent_role[-1][2] = True
         agent_id.append(track["metadata"]["object_id"])
         agent_type.append(track["type"])
         agent_states_list = np.vstack(list(track["state"].values())).T.tolist()
         agent_states.append(agent_states_list)
-
     return agent_id, agent_type, agent_states, agent_role
 
 

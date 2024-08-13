@@ -80,7 +80,7 @@ class DataH5nuplan(LightningDataModule):
         n_step_history = 11
         n_agent_no_sim = 0
         n_pl = 1024
-        n_tl = 500
+        n_tl = 200
         n_tl_stop = 40
         n_pl_node = 20
         self.tensor_size_train = {
