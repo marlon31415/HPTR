@@ -15,9 +15,6 @@ from shapely.geometry.linestring import LineString
 from shapely.geometry.multilinestring import MultiLineString
 import matplotlib.pyplot as plt
 
-# from metadrive.scenario import ScenarioDescription as SD
-# from metadrive.type import MetaDriveType
-
 from nuplan.planning.scenario_builder.nuplan_db.nuplan_scenario import NuPlanScenario
 from nuplan.common.maps.maps_datatypes import (
     SemanticMapLayer,
@@ -60,11 +57,10 @@ PL_TYPES = {
     "WALKWAYS": 5,
     "CARPARK_AREA": 6,
     # "PUDO": 16,
-    "ROADBLOCK": 7,
-    "ROADBLOCK_CONNECTOR": 8,
-    "LINE_BROKEN_SINGLE_WHITE": 9,
-    "CENTERLINE": 10,
-    "LINE_BROKEN_SINGLE_WHITE": 11,
+    # "ROADBLOCK": 7,
+    # "ROADBLOCK_CONNECTOR": 8,
+    "LINE_BROKEN_SINGLE_WHITE": 7,
+    "CENTERLINE": 8,
 }
 N_PL_TYPE = len(PL_TYPES)
 DIM_VEH_LANES = [7, 8]
@@ -91,13 +87,13 @@ AGENT_TYPES = {
 }
 N_AGENT_TYPE = len(set(AGENT_TYPES.values()))
 
-N_PL_MAX = 3000
+N_PL_MAX = 1500
 N_TL_MAX = 40
-N_AGENT_MAX = 500
+N_AGENT_MAX = 300
 
 N_PL = 1024
-N_TL = 500  # due to polyline splitting this value can be higher than N_TL_MAX
-N_AGENT = 500
+N_TL = 200  # due to polyline splitting this value can be higher than N_TL_MAX
+N_AGENT = 300
 N_AGENT_NO_SIM = N_AGENT_MAX - N_AGENT
 
 THRESH_MAP = 120
@@ -107,13 +103,14 @@ N_STEP = 91
 STEP_CURRENT = 10
 
 
-def collate_agent_features(scenario: NuPlanScenario, center, only_agents=True):
+def collate_agent_features(
+    scenario: NuPlanScenario, center, start_iter, only_agents=True
+):
     agent_id = []
     agent_type = []
     agent_states = []
     agent_role = []
 
-    episode_len = scenario.get_number_of_iterations()
     detection_ret = []
     all_obj_ids = set()
     ego_id = scenario.initial_ego_state.scene_object_metadata.track_token  # 'ego'
@@ -122,7 +119,7 @@ def collate_agent_features(scenario: NuPlanScenario, center, only_agents=True):
     # tracked objects (not ego)
     for frame_data in [
         scenario.get_tracked_objects_at_iteration(i).tracked_objects
-        for i in range(episode_len)
+        for i in range(start_iter, N_STEP + start_iter)
     ]:
         new_frame_data = {}
         for obj in frame_data:
@@ -134,19 +131,19 @@ def collate_agent_features(scenario: NuPlanScenario, center, only_agents=True):
         id: dict(
             type="UNSET",
             state=dict(
-                position_x=np.zeros(shape=(episode_len,)),
-                position_y=np.zeros(shape=(episode_len,)),
-                position_z=np.zeros(shape=(episode_len,)),
-                length=np.zeros(shape=(episode_len,)),
-                width=np.zeros(shape=(episode_len,)),
-                height=np.zeros(shape=(episode_len,)),
-                heading=np.zeros(shape=(episode_len,)),
-                velocity_x=np.zeros(shape=(episode_len,)),
-                velocity_y=np.zeros(shape=(episode_len,)),
-                valid=np.zeros(shape=(episode_len,)),
+                position_x=np.zeros(shape=(N_STEP,)),
+                position_y=np.zeros(shape=(N_STEP,)),
+                position_z=np.zeros(shape=(N_STEP,)),
+                length=np.zeros(shape=(N_STEP,)),
+                width=np.zeros(shape=(N_STEP,)),
+                height=np.zeros(shape=(N_STEP,)),
+                heading=np.zeros(shape=(N_STEP,)),
+                velocity_x=np.zeros(shape=(N_STEP,)),
+                velocity_y=np.zeros(shape=(N_STEP,)),
+                valid=np.zeros(shape=(N_STEP,)),
             ),
             metadata=dict(
-                track_length=episode_len,
+                track_length=N_STEP,
                 nuplan_type=None,
                 object_id=i + 1,  # small integer ids
                 nuplan_id=id,  # hex ids
@@ -185,7 +182,9 @@ def collate_agent_features(scenario: NuPlanScenario, center, only_agents=True):
         tracks.pop(track)
 
     # ego
-    sdc_traj = parse_ego_vehicle_state_trajectory(scenario, center)
+    sdc_traj = parse_ego_vehicle_state_trajectory(
+        scenario, center, start_iter, start_iter + N_STEP
+    )
     ego_track = tracks[ego_id]
 
     for frame_idx, obj_state in enumerate(sdc_traj):
@@ -237,19 +236,17 @@ def collate_agent_features(scenario: NuPlanScenario, center, only_agents=True):
     return agent_id, agent_type, agent_states, agent_role
 
 
-def collate_tl_features(scenario, center):
+def collate_tl_features(scenario, center, start_iter):
     tl_lane_state = []
     tl_lane_id = []
     tl_stop_point = []
-
-    length = scenario.get_number_of_iterations()
 
     frames = [
         {
             str(t.lane_connector_id): t.status
             for t in scenario.get_traffic_light_status_at_iteration(i)
         }
-        for i in range(length)
+        for i in range(start_iter, N_STEP + start_iter)
     ]
 
     for frame in frames:
@@ -268,7 +265,7 @@ def collate_tl_features(scenario, center):
     return tl_lane_state, tl_lane_id, tl_stop_point
 
 
-def collate_map_features(map_api, center, radius=500):
+def collate_map_features(map_api, center, radius=200):
     # map features
     mf_id = []
     mf_xyz = []
@@ -437,7 +434,6 @@ def convert_nuplan_scenario(
     h5file: h5py.File,
     i: int,
     scenario: NuPlanScenario,
-    version,
     rand_pos,
     rand_yaw,
     pack_all,
@@ -446,9 +442,6 @@ def convert_nuplan_scenario(
     iteration: int = 0,
     split: str = "training",
 ):
-    """
-    Data will be interpolated to 0.1s time interval, while the time interval of original key frames are 0.5s.
-    """
     scenario_log_interval = scenario.database_interval
     assert abs(scenario_log_interval - 0.1) < 1e-3, (
         "Log interval should be 0.1 or Interpolating is required! "
@@ -460,11 +453,11 @@ def convert_nuplan_scenario(
 
     # agents
     agent_id, agent_type, agent_states, agent_role = collate_agent_features(
-        scenario, scenario_center
+        scenario, scenario_center, iteration
     )
     # traffic light
     tl_lane_state, tl_lane_id, tl_stop_point = collate_tl_features(
-        scenario, scenario_center
+        scenario, scenario_center, iteration
     )
     # map
     mf_id, mf_xyz, mf_type, mf_edge = collate_map_features(
@@ -553,7 +546,9 @@ def convert_nuplan_scenario(
         )
 
     hf_episode = h5file.create_group(str(i))
-    hf_episode.attrs["scenario_id"] = os.path.splitext(scenario.log_name)[0]
+    hf_episode.attrs["scenario_id"] = os.path.splitext(scenario.log_name)[0] + str(
+        iteration
+    )
     hf_episode.attrs["scenario_center"] = scenario_center
     hf_episode.attrs["scenario_yaw"] = scenario_yaw
     hf_episode.attrs["with_map"] = episode_with_map
@@ -593,7 +588,7 @@ def main():
 
     out_path = Path(args.out_dir)
     out_path.mkdir(exist_ok=True)
-    out_h5_path = out_path / (args.dataset + ".h5")
+    out_h5_path = out_path / (args.dataset + "_tmp" + ".h5")
 
     data_root = os.path.join(args.data_dir, "nuplan-v1.1/splits/mini")
 
@@ -613,12 +608,22 @@ def main():
         0,
     )
     with h5py.File(out_h5_path, "w") as hf:
+        k = 0
         for i, scenario in tqdm(
             enumerate(scenarios),
             total=len(scenarios),
             desc="Converting nuPlan Scenarios",
         ):
-            try:
+            scenario_len_sec = int(scenario.duration_s.time_s)
+            # episode_len_iter = scenario.get_number_of_iterations()
+            scenario_time_step = scenario.database_interval
+            assert scenario_time_step == 0.1, "Only support 0.1s time step"
+            for j in range(
+                0,
+                int((scenario_len_sec - 1) / scenario_time_step) - (N_STEP - 1),
+                10,
+            ):
+                # try:
                 (
                     _n_pl_max,
                     _n_tl_max,
@@ -627,15 +632,14 @@ def main():
                     _n_agent_no_sim,
                 ) = convert_nuplan_scenario(
                     hf,
-                    i,
+                    k,
                     scenario,
-                    args.version,
                     args.rand_pos,
                     args.rand_yaw,
                     pack_all,
                     pack_history,
                     args.dest_no_pred,
-                    0,
+                    j,
                     args.dataset,
                 )
 
@@ -652,9 +656,11 @@ def main():
                     f"n_agent_max: {n_agent_max}, n_agent_sim: {n_agent_sim}, n_agent_no_sim: {n_agent_no_sim}"
                 )
                 hf.attrs["data_len"] = data_len
-            except:
-                print(f"\nError in scenario {i}: {scenario.log_name}\n")
-                continue
+                k += 1
+                # except:
+                #     print(f"\nError in scenario {i}: {scenario.log_name}\n")
+                #     continue
+        hf.attrs["version"] = args.version
 
 
 if __name__ == "__main__":
