@@ -92,7 +92,7 @@ def get_nuplan_scenarios(
     # Compose the configuration
     overrides = [
         f"group={save_dir}",
-        "worker=sequential",
+        "worker=ray_distributed",
         f"ego_controller={ego_controller}",
         f"observation={observation}",
         f"hydra.searchpath=[{simulation_hydra_paths.common_dir}, {simulation_hydra_paths.experiment_dir}]",
