@@ -506,7 +506,7 @@ def convert_nuplan_scenario(
     pack_utils.filter_episode_traffic_lights(episode)
     pack_utils.repack_episode_traffic_lights(episode, episode_reduced, N_TL, N_TL_STATE)
 
-    if "training" in split:
+    if split == "training":
         mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
             episode=episode,
             episode_reduced=episode_reduced,
@@ -526,6 +526,52 @@ def convert_nuplan_scenario(
             dim_cyc_lanes=DIM_CYC_LANES,
             dim_ped_lanes=DIM_PED_LANES,
             dest_no_pred=dest_no_pred,
+        )
+    elif split == "validation":
+        mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
+            episode=episode,
+            episode_reduced=episode_reduced,
+            n_agent=N_AGENT,
+            prefix="history/",
+            dim_veh_lanes=DIM_VEH_LANES,
+            dist_thresh_agent=THRESH_AGENT,
+            step_current=STEP_CURRENT,
+        )
+        pack_utils.repack_episode_agents(
+            episode=episode,
+            episode_reduced=episode_reduced,
+            mask_sim=mask_sim,
+            n_agent=N_AGENT,
+            prefix="",
+            dim_veh_lanes=DIM_VEH_LANES,
+            dim_cyc_lanes=DIM_CYC_LANES,
+            dim_ped_lanes=DIM_PED_LANES,
+            dest_no_pred=dest_no_pred,
+        )
+        pack_utils.repack_episode_agents(
+            episode, episode_reduced, mask_sim, N_AGENT, "history/"
+        )
+        pack_utils.repack_episode_agents_no_sim(
+            episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, ""
+        )
+        pack_utils.repack_episode_agents_no_sim(
+            episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, "history/"
+        )
+    elif split == "testing":
+        mask_sim, mask_no_sim = pack_utils.filter_episode_agents(
+            episode=episode,
+            episode_reduced=episode_reduced,
+            n_agent=N_AGENT,
+            prefix="history/",
+            dim_veh_lanes=DIM_VEH_LANES,
+            dist_thresh_agent=THRESH_AGENT,
+            step_current=STEP_CURRENT,
+        )
+        pack_utils.repack_episode_agents(
+            episode, episode_reduced, mask_sim, N_AGENT, "history/"
+        )
+        pack_utils.repack_episode_agents_no_sim(
+            episode, episode_reduced, mask_no_sim, N_AGENT_NO_SIM, "history/"
         )
 
     n_agent_sim = mask_sim.sum()
