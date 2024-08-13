@@ -268,11 +268,23 @@ def parse_ego_vehicle_state(state, nuplan_center):
     return ret
 
 
-def parse_ego_vehicle_state_trajectory(scenario, nuplan_center):
-    data = [
-        parse_ego_vehicle_state(scenario.get_ego_state_at_iteration(i), nuplan_center)
-        for i in range(scenario.get_number_of_iterations())
-    ]
+def parse_ego_vehicle_state_trajectory(
+    scenario, nuplan_center, start_iter=None, stop_iter=None
+):
+    if start_iter is None:
+        data = [
+            parse_ego_vehicle_state(
+                scenario.get_ego_state_at_iteration(i), nuplan_center
+            )
+            for i in range(scenario.get_number_of_iterations())
+        ]
+    else:
+        data = [
+            parse_ego_vehicle_state(
+                scenario.get_ego_state_at_iteration(i), nuplan_center
+            )
+            for i in range(start_iter, stop_iter)
+        ]
     for i in range(len(data) - 1):
         data[i]["angular_velocity"] = compute_angular_velocity(
             initial_heading=data[i]["heading"],
