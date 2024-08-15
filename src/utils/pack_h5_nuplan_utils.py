@@ -185,7 +185,10 @@ def resample_polyline(path, polyline, sample_distance=0.5):
     length = path.length
     num_samples_final = max(length // sample_distance, 1)
     num_samples_path = len(path.discrete_path)
-    sample_rate = int(num_samples_path // num_samples_final)
+    if num_samples_path <= num_samples_final:
+        return polyline
+    else:
+        sample_rate = int(num_samples_path // num_samples_final)
     return polyline[::sample_rate]
 
 

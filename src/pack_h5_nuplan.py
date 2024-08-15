@@ -4,7 +4,6 @@ import sys
 sys.path.append(".")
 
 import os
-import random
 from argparse import ArgumentParser
 from tqdm import tqdm
 import h5py
@@ -44,29 +43,29 @@ PL_TYPES = {
     "LANE": 0,
     "INTERSECTION": 1,
     "STOP_LINE": 2,
-    # "TURN_STOP": 3,
+    # "TURN_STOP": x,
     "CROSSWALK": 3,
-    # "DRIVABLE_AREA": 5,
-    # "YIELD": 6,
-    # "TRAFFIC_LIGHT": 7,
-    # "STOP_SIGN": 8,
-    # "EXTENDED_PUDO": 9,
-    # "SPEED_BUMP": 10,
-    "LANE_CONNECTOR": 4,
-    # "BASELINE_PATHS": 12,
-    # "BOUNDARIES": 13,
+    # "DRIVABLE_AREA": x,
+    # "YIELD": x,
+    # "TRAFFIC_LIGHT": x,
+    # "STOP_SIGN": x,
+    # "EXTENDED_PUDO": x,
+    # "SPEED_BUMP": x,
+    # "LANE_CONNECTOR": x,
+    # "BASELINE_PATHS": x,
+    "BOUNDARIES": 4,
     "WALKWAYS": 5,
     "CARPARK_AREA": 6,
-    # "PUDO": 16,
-    # "ROADBLOCK": 7,
-    # "ROADBLOCK_CONNECTOR": 8,
+    # "PUDO": x,
+    # "ROADBLOCK": x,
+    # "ROADBLOCK_CONNECTOR": x,
     "LINE_BROKEN_SINGLE_WHITE": 7,
     "CENTERLINE": 8,
 }
 N_PL_TYPE = len(PL_TYPES)
-DIM_VEH_LANES = [7, 8]
-DIM_CYC_LANES = [7, 8]
-DIM_PED_LANES = [3, 5]
+DIM_VEH_LANES = [8]
+DIM_CYC_LANES = [4, 8]
+DIM_PED_LANES = [3, 4, 5]
 
 TL_TYPES = {
     "GREEN": 3,
@@ -88,7 +87,7 @@ AGENT_TYPES = {
 }
 N_AGENT_TYPE = len(set(AGENT_TYPES.values()))
 
-N_PL_MAX = 1500
+N_PL_MAX = 2000
 N_TL_MAX = 40
 N_AGENT_MAX = 500
 
@@ -102,6 +101,9 @@ THRESH_AGENT = 120
 
 N_STEP = 91
 STEP_CURRENT = 10
+
+N_AGENT_PRED_CHALLENGE = 8
+N_AGENT_INTERACT_CHALLENGE = 2
 
 
 def collate_agent_features(
@@ -165,7 +167,7 @@ def collate_agent_features(
             if obj_type is None:
                 tracks_to_remove.add(nuplan_id)
                 continue
-            tracks[nuplan_id]["type"] = AGENT_TYPES[f"{obj_type.name}"]
+            tracks[nuplan_id]["type"] = AGENT_TYPES[obj_type.name]
             if tracks[nuplan_id]["metadata"]["nuplan_type"] is None:
                 tracks[nuplan_id]["metadata"]["nuplan_type"] = int(
                     obj_state.tracked_object_type
@@ -189,10 +191,17 @@ def collate_agent_features(
                 tracks[nuplan_id]["metadata"]["distance_to_ego"] = dist_to_ego
 
     dists_to_ego.sort()
-    if len(dists_to_ego) > N_AGENT - 1:
-        interest_dist = dists_to_ego[N_AGENT - 2]
+
+    if len(dists_to_ego) > N_AGENT_PRED_CHALLENGE - 1:
+        predict_dist = dists_to_ego[N_AGENT_PRED_CHALLENGE - 2]
     else:  # not enough agents
-        interest_dist = dists_to_ego[-1]
+        predict_dist = dists_to_ego[-1]
+    interest_dist = dists_to_ego[N_AGENT_INTERACT_CHALLENGE - 2]
+
+    # if len(dists_to_ego) > N_AGENT - 1:
+    #     predict_dist = dists_to_ego[N_AGENT - 2]
+    # else:  # not enough agents
+    #     predict_dist = dists_to_ego[-1]
 
     for track in list(tracks_to_remove):
         tracks.pop(track)
@@ -238,11 +247,10 @@ def collate_agent_features(
         # only save vehicles, pedestrians, bicycles
         if only_agents and track["type"] > 2:
             continue
+        _dist_to_ego = track["metadata"]["distance_to_ego"]
         agent_role.append([False, False, False])
         if track["type"] in [0, 1, 2]:
-            agent_role[-1][2] = (
-                True if track["metadata"]["distance_to_ego"] <= interest_dist else False
-            )
+            agent_role[-1][2] = True if _dist_to_ego <= predict_dist else False
             agent_role[-1][1] = False
         if track["metadata"]["nuplan_type"] == int(NuPlanEgoType):
             agent_role[-1][0] = True
@@ -311,8 +319,6 @@ def collate_map_features(map_api, center, radius=200):
     nearest_vector_map = map_api.get_proximal_map_objects(
         center_for_query, radius, layer_names
     )
-    # BOUNDARIES
-    boundaries = map_api._get_vector_map_layer(SemanticMapLayer.BOUNDARIES)
 
     # STOP LINES
     # Filter out stop polygons from type turn stop
@@ -332,66 +338,93 @@ def collate_map_features(map_api, center, radius=200):
             )
             mf_xyz.append(mock_2d_to_3d_points(polygon_centered)[::4])
 
+    # LANES
+    for layer in [SemanticMapLayer.LANE, SemanticMapLayer.LANE_CONNECTOR]:
+        for lane in nearest_vector_map[layer]:
+            if not hasattr(lane, "baseline_path"):
+                continue
+            # Centerline (as polyline)
+            centerline = extract_centerline(lane, center, True, 1)
+            mf_id.append(int(lane.id))  # using lane ids for centerlines!
+            mf_type.append(PL_TYPES["CENTERLINE"])
+            mf_xyz.append(mock_2d_to_3d_points(centerline))
+            if len(lane.outgoing_edges) > 0:
+                for _out_edge in lane.outgoing_edges:
+                    mf_edge.append([int(lane.id), int(_out_edge.id)])
+            else:
+                mf_edge.append([int(lane.id), -1])
+            # Left boundary of centerline (as polyline)
+            left = lane.left_boundary
+            left_polyline = get_points_from_boundary(left, center, True, 1)
+            mf_id.append(left.id)
+            mf_type.append(PL_TYPES["LINE_BROKEN_SINGLE_WHITE"])
+            mf_xyz.append(mock_2d_to_3d_points(left_polyline))
+            # right = lane.right_boundary
+            # right_polyline = get_points_from_boundary(right, center)
+            # mf_id.append(right.id)
+            # mf_type.append(PL_TYPES["LINE_BROKEN_SINGLE_WHITE"])
+            # mf_xyz.append(mock_2d_to_3d_points(right_polyline)[::2])
+
     # ROADBLOCKS (contain lanes)
+    # Extract neighboring lanes and road boundaries
     block_polygons = []
     for layer in [SemanticMapLayer.ROADBLOCK, SemanticMapLayer.ROADBLOCK_CONNECTOR]:
         for block in nearest_vector_map[layer]:
-            edges = (
+            # roadblock_polygon = block.polygon.boundary.xy
+            # polygon = nuplan_to_centered_vector(
+            #     np.array(roadblock_polygon).T, nuplan_center=[center[0], center[1]]
+            # )
+
+            # According to the map attributes, lanes are numbered left to right with smaller indices being on the
+            # left and larger indices being on the right.
+            lanes = (
                 sorted(block.interior_edges, key=lambda lane: lane.index)
                 if layer == SemanticMapLayer.ROADBLOCK
                 else block.interior_edges
             )
-            for index, lane_meta_data in enumerate(edges):
-                if not hasattr(lane_meta_data, "baseline_path"):
+            for i, lane in enumerate(lanes):
+                if not hasattr(lane, "baseline_path"):
                     continue
-                # if isinstance(lane_meta_data.polygon.boundary, MultiLineString):
-                #     boundary = gpd.GeoSeries(lane_meta_data.polygon.boundary).explode(
-                #         index_parts=True
-                #     )
-                #     sizes = []
-                #     for idx, polygon in enumerate(boundary[0]):
-                #         sizes.append(len(polygon.xy[1]))
-                #     points = boundary[0][np.argmax(sizes)].xy
-                # elif isinstance(lane_meta_data.polygon.boundary, LineString):
-                #     points = lane_meta_data.polygon.boundary.xy
-                # polygon = nuplan_to_centered_vector(
-                #     np.array(points).T, nuplan_center=[center[0], center[1]]
-                # )
-                # mf_id.append(int(lane_meta_data.id))
-                # mf_type.append(PL_TYPES[lane_meta_data.name])
-                # mf_xyz.append(mock_2d_to_3d_points(polygon)[::3])
-                if len(lane_meta_data.outgoing_edges) > 0:
-                    for _out_edge in lane_meta_data.outgoing_edges:
-                        mf_edge.append([int(lane_meta_data.id), int(_out_edge.id)])
-                else:
-                    mf_edge.append([int(lane_meta_data.id), -1])
-
-                # real polylines @TODO: maybe use the following polylines instead of roadblocks BUT maybe for lanes instead of roadblocks
-                centerline = extract_centerline(lane_meta_data, center, True, 1)
-                mf_id.append(int(lane_meta_data.id))
-                mf_type.append(PL_TYPES["CENTERLINE"])
-                mf_xyz.append(mock_2d_to_3d_points(centerline))
-                # mf_edge.append([])
-                # left = lane_meta_data.left_boundary
-                # left_polyline = get_points_from_boundary(left, center)
-                # mf_id.append(left.id)
-                # mf_type.append(PL_TYPES["LINE_BROKEN_SINGLE_WHITE"])
-                # mf_xyz.append(mock_2d_to_3d_points(left_polyline)[::2])
-                # mf_edge.append(
-                #     []
-                # )  # @TODO: calculate dir vectors
-                # right = lane_meta_data.right_boundary
-                # right_polyline = get_points_from_boundary(right, center)
-                # mf_id.append(right.id)
-                # mf_type.append(PL_TYPES["LINE_BROKEN_SINGLE_WHITE"])
-                # mf_xyz.append(mock_2d_to_3d_points(right_polyline)[::2])
-                # mf_edge.append([])  # @TODO: calculate dir vectors
+                if layer == SemanticMapLayer.ROADBLOCK:
+                    if i != 0:
+                        left_neighbor = lanes[i - 1]
+                        mf_edge.append([int(lane.id), int(left_neighbor.id)])
+                    if i != len(lanes) - 1:
+                        right_neighbor = lanes[i + 1]
+                        mf_edge.append([int(lane.id), int(right_neighbor.id)])
+                    # if i == 0:  # left most lane
+                    #     left = lane.left_boundary
+                    #     left_boundary = get_points_from_boundary(left, center, True, 1)
+                    #     try:
+                    #         idx = mf_id.index(left.id)
+                    #         mf_id[idx] = left.id  # use roadblock ids for boundaries
+                    #         mf_type[idx] = PL_TYPES["BOUNDARIES"]
+                    #         mf_xyz[idx] = mock_2d_to_3d_points(left_boundary)
+                    #     except:
+                    #         mf_id.append(block.id)  # use roadblock ids for boundaries
+                    #         mf_type.append(PL_TYPES["BOUNDARIES"])
+                    #         mf_xyz.append(mock_2d_to_3d_points(right_boundary))
+                    if i == len(lanes) - 1:  # right most lane
+                        right = lane.right_boundary
+                        right_boundary = get_points_from_boundary(
+                            right, center, True, 1
+                        )
+                        try:
+                            idx = mf_id.index(right.id)
+                            mf_id[idx] = right.id  # use roadblock ids for boundaries
+                            mf_type[idx] = PL_TYPES["BOUNDARIES"]
+                            mf_xyz[idx] = mock_2d_to_3d_points(right_boundary)
+                        except:
+                            mf_id.append(block.id)  # use roadblock ids for boundaries
+                            mf_type.append(PL_TYPES["BOUNDARIES"])
+                            mf_xyz.append(mock_2d_to_3d_points(right_boundary))
 
             if layer == SemanticMapLayer.ROADBLOCK:
                 block_polygons.append(block.polygon)
 
     # ROUTE
     # scenario.get_route_roadblock_ids()
+    # get_route_lane_polylines_from_roadblock_ids
 
     # WALKWAYS
     for area in nearest_vector_map[SemanticMapLayer.WALKWAYS]:
@@ -664,14 +697,13 @@ def main():
     else:
         scenarios = get_nuplan_scenarios(data_root, args.map_dir)
 
-    n_pl_max, n_tl_max, n_agent_max, n_agent_sim, n_agent_no_sim, data_len = (
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    )
+    n_pl_max = 0
+    n_tl_max = 0
+    n_agent_max = 0
+    n_agent_sim = 0
+    n_agent_no_sim = 0
+    data_len = 0
+
     with h5py.File(out_h5_path, "w") as hf:
         k = 0
         for i, scenario in tqdm(
