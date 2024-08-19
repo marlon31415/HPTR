@@ -80,6 +80,8 @@ class DataH5nuplan(LightningDataModule):
         n_step_history = 11
         n_agent_no_sim = 0
         n_pl = 1024
+        n_pl_route = 200
+        n_pl_type = 9
         n_tl = 200
         n_tl_stop = 40
         n_pl_node = 20
@@ -113,7 +115,7 @@ class DataH5nuplan(LightningDataModule):
             "agent/dest": (n_agent,),  # int64: index to map n_pl
             # map polylines
             "map/valid": (n_pl, n_pl_node),  # bool
-            "map/type": (n_pl, 12),  # bool one_hot
+            "map/type": (n_pl, n_pl_type),  # bool one_hot
             "map/pos": (n_pl, n_pl_node, 2),  # float32
             "map/dir": (n_pl, n_pl_node, 2),  # float32
             "map/boundary": (4,),  # xmin, xmax, ymin, ymax
@@ -125,6 +127,11 @@ class DataH5nuplan(LightningDataModule):
             "tl_stop/state": (n_step, n_tl_stop, 4),  # bool one_hot
             "tl_stop/pos": (n_step, n_tl_stop, 2),  # x,y
             "tl_stop/dir": (n_step, n_tl_stop, 2),  # x,y
+            # route
+            "route/valid": (n_pl_route, n_pl_node),  # bool
+            "route/type": (n_pl_route, n_pl_type),  # bool one_hot
+            "route/pos": (n_pl_route, n_pl_node, 2),  # float32
+            "route/dir": (n_pl_route, n_pl_node, 2),  # float32
         }
 
         self.tensor_size_test = {
@@ -171,7 +178,7 @@ class DataH5nuplan(LightningDataModule):
             "history/agent_no_sim/size": (n_agent_no_sim, 3),
             # map
             "map/valid": (n_pl, n_pl_node),  # bool
-            "map/type": (n_pl, 12),  # bool one_hot
+            "map/type": (n_pl, n_pl_type),  # bool one_hot
             "map/pos": (n_pl, n_pl_node, 2),  # float32
             "map/dir": (n_pl, n_pl_node, 2),  # float32
             "map/boundary": (4,),  # xmin, xmax, ymin, ymax
@@ -183,6 +190,11 @@ class DataH5nuplan(LightningDataModule):
             "history/tl_stop/state": (n_step_history, n_tl_stop, 4),  # bool one_hot
             "history/tl_stop/pos": (n_step_history, n_tl_stop, 2),  # x,y
             "history/tl_stop/dir": (n_step_history, n_tl_stop, 2),  # dx,dy
+            # route
+            "route/valid": (n_pl_route, n_pl_node),  # bool
+            "route/type": (n_pl_route, n_pl_type),  # bool one_hot
+            "route/pos": (n_pl_route, n_pl_node, 2),  # float32
+            "route/dir": (n_pl_route, n_pl_node, 2),  # float32
         }
 
         self.tensor_size_val = {
@@ -210,6 +222,11 @@ class DataH5nuplan(LightningDataModule):
                 n_agent_no_sim,
                 3,
             ),  # float32: [length, width, height]
+            # route
+            "route/valid": (n_pl_route, n_pl_node),  # bool
+            "route/type": (n_pl_route, n_pl_type),  # bool one_hot
+            "route/pos": (n_pl_route, n_pl_node, 2),  # float32
+            "route/dir": (n_pl_route, n_pl_node, 2),  # float32
         }
 
         self.tensor_size_val = (

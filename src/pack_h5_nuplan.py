@@ -14,6 +14,11 @@ from shapely.ops import unary_union
 from shapely.geometry.linestring import LineString
 from shapely.geometry.multilinestring import MultiLineString
 import matplotlib.pyplot as plt
+import multiprocessing as mp
+from functools import partial
+from more_itertools import batched
+from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor
 
 from nuplan.planning.scenario_builder.nuplan_db.nuplan_scenario import NuPlanScenario
 from nuplan.common.maps.maps_datatypes import (
@@ -26,6 +31,7 @@ from nuplan.common.maps.maps_datatypes import (
 from nuplan.common.actor_state.agent import Agent
 from nuplan.common.actor_state.static_object import StaticObject
 from nuplan.common.actor_state.state_representation import Point2D
+
 import src.utils.pack_h5 as pack_utils
 from src.utils.pack_h5_nuplan_utils import (
     NuPlanEgoType,
@@ -37,14 +43,18 @@ from src.utils.pack_h5_nuplan_utils import (
     parse_ego_vehicle_state_trajectory,
     extract_centerline,
     mock_2d_to_3d_points,
+    get_route_lane_polylines_from_roadblock_ids,
+    get_start_idxs_for_scenarios,
 )
 
+SCENARIO_QUEUE = mp.Manager().Queue()
+
 PL_TYPES = {
-    "LANE": 0,
-    "INTERSECTION": 1,
-    "STOP_LINE": 2,
+    # "LANE": 0,
+    "INTERSECTION": 0,
+    "STOP_LINE": 1,
     # "TURN_STOP": x,
-    "CROSSWALK": 3,
+    "CROSSWALK": 2,
     # "DRIVABLE_AREA": x,
     # "YIELD": x,
     # "TRAFFIC_LIGHT": x,
@@ -53,19 +63,20 @@ PL_TYPES = {
     # "SPEED_BUMP": x,
     # "LANE_CONNECTOR": x,
     # "BASELINE_PATHS": x,
-    "BOUNDARIES": 4,
-    "WALKWAYS": 5,
-    "CARPARK_AREA": 6,
+    "BOUNDARIES": 3,
+    "WALKWAYS": 4,
+    "CARPARK_AREA": 5,
     # "PUDO": x,
     # "ROADBLOCK": x,
     # "ROADBLOCK_CONNECTOR": x,
-    "LINE_BROKEN_SINGLE_WHITE": 7,
-    "CENTERLINE": 8,
+    "LINE_BROKEN_SINGLE_WHITE": 6,
+    "CENTERLINE": 7,
+    "ROUTE": 8,
 }
 N_PL_TYPE = len(PL_TYPES)
-DIM_VEH_LANES = [8]
-DIM_CYC_LANES = [4, 8]
-DIM_PED_LANES = [3, 4, 5]
+DIM_VEH_LANES = [7]
+DIM_CYC_LANES = [3, 7]
+DIM_PED_LANES = [2, 3, 4]
 
 TL_TYPES = {
     "GREEN": 3,
@@ -90,11 +101,13 @@ N_AGENT_TYPE = len(set(AGENT_TYPES.values()))
 N_PL_MAX = 2000
 N_TL_MAX = 40
 N_AGENT_MAX = 500
+N_PL_ROUTE_MAX = 200
 
 N_PL = 1024
 N_TL = 200  # due to polyline splitting this value can be higher than N_TL_MAX
 N_AGENT = 64
 N_AGENT_NO_SIM = 256
+N_PL_ROUTE = N_PL_ROUTE_MAX
 
 THRESH_MAP = 120
 THRESH_AGENT = 120
@@ -102,6 +115,7 @@ THRESH_AGENT = 120
 N_STEP = 91
 STEP_CURRENT = 10
 
+N_SDC_AGENT = 1
 N_AGENT_PRED_CHALLENGE = 8
 N_AGENT_INTERACT_CHALLENGE = 2
 
@@ -117,7 +131,6 @@ def collate_agent_features(
     detection_ret = []
     all_obj_ids = set()
     ego_id = scenario.initial_ego_state.scene_object_metadata.track_token  # 'ego'
-    # ego_id = "0"
     all_obj_ids.add(ego_id)
     # tracked objects (not ego)
     for frame_data in [
@@ -195,13 +208,10 @@ def collate_agent_features(
     if len(dists_to_ego) > N_AGENT_PRED_CHALLENGE - 1:
         predict_dist = dists_to_ego[N_AGENT_PRED_CHALLENGE - 2]
     else:  # not enough agents
-        predict_dist = dists_to_ego[-1]
-    interest_dist = dists_to_ego[N_AGENT_INTERACT_CHALLENGE - 2]
-
-    # if len(dists_to_ego) > N_AGENT - 1:
-    #     predict_dist = dists_to_ego[N_AGENT - 2]
-    # else:  # not enough agents
-    #     predict_dist = dists_to_ego[-1]
+        predict_dist = dists_to_ego[-1] if len(dists_to_ego) > 0 else -1
+    interest_dist = (
+        dists_to_ego[N_AGENT_INTERACT_CHALLENGE - 2] if len(dists_to_ego) > 1 else -1
+    )
 
     for track in list(tracks_to_remove):
         tracks.pop(track)
@@ -251,7 +261,7 @@ def collate_agent_features(
         agent_role.append([False, False, False])
         if track["type"] in [0, 1, 2]:
             agent_role[-1][2] = True if _dist_to_ego <= predict_dist else False
-            agent_role[-1][1] = False
+            agent_role[-1][1] = True if _dist_to_ego <= interest_dist else False
         if track["metadata"]["nuplan_type"] == int(NuPlanEgoType):
             agent_role[-1][0] = True
             agent_role[-1][1] = True
@@ -422,10 +432,6 @@ def collate_map_features(map_api, center, radius=200):
             if layer == SemanticMapLayer.ROADBLOCK:
                 block_polygons.append(block.polygon)
 
-    # ROUTE
-    # scenario.get_route_roadblock_ids()
-    # get_route_lane_polylines_from_roadblock_ids
-
     # WALKWAYS
     for area in nearest_vector_map[SemanticMapLayer.WALKWAYS]:
         if isinstance(area.polygon.exterior, MultiLineString):
@@ -482,16 +488,40 @@ def collate_map_features(map_api, center, radius=200):
     return mf_id, mf_xyz, mf_type, mf_edge
 
 
+def collate_route_features(scenario, center, agent_id, agent_role, radius=200):
+    # Note: currently only working for one ego vehicle
+    sdc_id = []
+    sdc_route_type = []
+    sdc_route_lane_id = []
+    sdc_route_xyz = []
+
+    sdc_idx = agent_role.index([True, True, True])  # ego
+    sdc_id.append(agent_id[sdc_idx])
+
+    route_roadblock_ids = scenario.get_route_roadblock_ids()
+    polylines, route_lane_ids = get_route_lane_polylines_from_roadblock_ids(
+        scenario.map_api, Point2D(center[0], center[1]), radius, route_roadblock_ids
+    )
+    route_lane_polylines = []
+    pl_types = []
+    for polyline in polylines:
+        polyline_centered = nuplan_to_centered_vector(polyline, center)
+        route_lane_polylines.append(mock_2d_to_3d_points(polyline_centered)[::10])
+        pl_types.append(PL_TYPES["ROUTE"])
+    sdc_route_xyz.append(route_lane_polylines)
+    sdc_route_lane_id.append(route_lane_ids)
+    sdc_route_type.append(pl_types)
+    return sdc_id, sdc_route_lane_id, sdc_route_type, sdc_route_xyz
+
+
 def convert_nuplan_scenario(
-    h5file: h5py.File,
-    i: int,
     scenario: NuPlanScenario,
+    iteration,
     rand_pos,
     rand_yaw,
     pack_all,
     pack_history,
     dest_no_pred,
-    iteration: int = 0,
     split: str = "training",
 ):
     scenario_log_interval = scenario.database_interval
@@ -499,6 +529,7 @@ def convert_nuplan_scenario(
         "Log interval should be 0.1 or Interpolating is required! "
         "By setting NuPlan subsample ratio can address this"
     )
+
     # centered all positions to ego car
     state = scenario.get_ego_state_at_iteration(iteration)
     scenario_center = [state.waypoint.x, state.waypoint.y]
@@ -514,6 +545,11 @@ def convert_nuplan_scenario(
     # map
     mf_id, mf_xyz, mf_type, mf_edge = collate_map_features(
         scenario.map_api, scenario_center
+    )
+
+    # route
+    sdc_id, sdc_route_id, sdc_route_type, sdc_route_xyz = collate_route_features(
+        scenario, scenario_center, agent_id, agent_role
     )
 
     episode = {}
@@ -546,6 +582,14 @@ def convert_nuplan_scenario(
         n_agent_max=N_AGENT_MAX,
         step_current=STEP_CURRENT,
     )
+    n_route_pl = pack_utils.pack_episode_route(
+        episode=episode,
+        sdc_id=sdc_id,
+        sdc_route_id=sdc_route_id,
+        sdc_route_type=sdc_route_type,
+        sdc_route_xyz=sdc_route_xyz,
+        n_route_pl_max=N_PL_ROUTE_MAX,
+    )
     scenario_center, scenario_yaw = pack_utils.center_at_sdc(
         episode, rand_pos, rand_yaw
     )
@@ -554,6 +598,8 @@ def convert_nuplan_scenario(
     pack_utils.filter_episode_map(episode, N_PL, THRESH_MAP, thresh_z=3)
     episode_with_map = episode["map/valid"].any(1).sum() > 0
     pack_utils.repack_episode_map(episode, episode_reduced, N_PL, N_PL_TYPE)
+
+    pack_utils.repack_episode_route(episode, episode_reduced, N_PL_ROUTE, N_PL_TYPE)
 
     pack_utils.filter_episode_traffic_lights(episode)
     pack_utils.repack_episode_traffic_lights(episode, episode_reduced, N_TL, N_TL_STATE)
@@ -640,23 +686,63 @@ def convert_nuplan_scenario(
             episode["history/agent/valid"], episode["history/agent/pos"]
         )
         print(
-            f"scenario {i} has no map! map boundary is: {episode_reduced['map/boundary']}"
+            f"scenario {scenario.log_name} has no map! map boundary is: {episode_reduced['map/boundary']}"
         )
 
-    hf_episode = h5file.create_group(str(i))
-    hf_episode.attrs["scenario_id"] = os.path.splitext(scenario.log_name)[0] + str(
-        iteration
+    episode_name = os.path.splitext(scenario.token)[0] + "_" + str(iteration)
+    episode_metadata = {
+        "id": episode_name,
+        "center": scenario_center,
+        "yaw": scenario_yaw,
+        "with_map": episode_with_map,
+    }
+
+    return (
+        episode_reduced,
+        episode_metadata,
+        n_pl,
+        n_tl,
+        n_agent,
+        n_agent_sim,
+        n_agent_no_sim,
+        n_route_pl,
     )
-    hf_episode.attrs["scenario_center"] = scenario_center
-    hf_episode.attrs["scenario_yaw"] = scenario_yaw
-    hf_episode.attrs["with_map"] = episode_with_map
 
-    for k, v in episode_reduced.items():
-        hf_episode.create_dataset(
-            k, data=v, compression="gzip", compression_opts=4, shuffle=True
+
+def wrapper_convert_nuplan_scenario(
+    scenario_with_idx, rand_pos, rand_yaw, pack_all, pack_history, dest_no_pred, split
+):
+    scenario, iteration = scenario_with_idx
+    episode, metadata, n_pl, n_tl, n_agent, n_agent_sim, n_agent_no_sim, n_route_pl = (
+        convert_nuplan_scenario(
+            scenario,
+            iteration,
+            rand_pos,
+            rand_yaw,
+            pack_all,
+            pack_history,
+            dest_no_pred,
+            split,
         )
+    )
+    SCENARIO_QUEUE.put((episode, metadata))
+    return episode, metadata
 
-    return n_pl, n_tl, n_agent, n_agent_sim, n_agent_no_sim
+
+def write_to_h5_file(h5_file_path, queue, total_items):
+    with h5py.File(h5_file_path, "w") as h5_file:
+        for _ in range(total_items):
+            data, metadata = queue.get()
+            # Create a group for each item
+            group = h5_file.create_group(metadata["id"])
+            # Store the transformed data in a dataset within the group
+            for k, v in data.items():
+                group.create_dataset(
+                    k, data=v, compression="gzip", compression_opts=4, shuffle=True
+                )
+            # Add metadata to the group
+            for k, v in metadata.items():
+                group.attrs[k] = v
 
 
 def main():
@@ -666,98 +752,112 @@ def main():
     parser.add_argument("--map-dir", default=os.getenv("NUPLAN_MAPS_ROOT"))
     parser.add_argument("--version", "-v", default="v1.1", help="version of the raw data")
     parser.add_argument("--dataset", default="training")
+    parser.add_argument("--mini", action="store_true")
     parser.add_argument("--out-dir", default="/mrtstorage/datasets_tmp/nuplan_hptr")
     parser.add_argument("--rand-pos", default=50.0, type=float, help="Meter. Set to -1 to disable.")
     parser.add_argument("--rand-yaw", default=3.14, type=float, help="Radian. Set to -1 to disable.")
     parser.add_argument("--dest-no-pred", action="store_true")
     parser.add_argument("--test", action="store_true", help="for test use only. convert one log")
+    parser.add_argument("--num-workers", default=32, type=int)
+    parser.add_argument("--batch-size", default=128, type=int)
     args = parser.parse_args()
     # fmt: on
 
     if "training" in args.dataset:
         pack_all = True  # ["agent/valid"]
         pack_history = False  # ["history/agent/valid"]
+        split = "train"
     elif "validation" in args.dataset:
         pack_all = True
         pack_history = True
+        split = "val"
     elif "testing" in args.dataset:
         pack_all = False
         pack_history = True
+        split = "test"
+
+    if args.mini:
+        split = "mini"
 
     out_path = Path(args.out_dir)
     out_path.mkdir(exist_ok=True)
-    out_h5_path = out_path / (args.dataset + "_tmp" + ".h5")
-
-    data_root = os.path.join(args.data_dir, "nuplan-v1.1/splits/mini")
+    if not args.mini:
+        out_h5_path = out_path / (args.dataset + ".h5")
+    else:
+        out_h5_path = out_path / (args.dataset + "_mini" + ".h5")
 
     if args.test:
+        data_root = os.path.join(args.data_dir, "nuplan-v1.1/splits/mini")
         scenarios = get_nuplan_scenarios(
             data_root, args.map_dir, logs=["2021.07.16.20.45.29_veh-35_01095_01486"]
         )
     else:
+        data_root = os.path.join(args.data_dir, "nuplan-v1.1/splits", split)
         scenarios = get_nuplan_scenarios(data_root, args.map_dir)
+    print(f"Converting {len(scenarios)} scenarios to {args.dataset} dataset")
 
-    n_pl_max = 0
-    n_tl_max = 0
-    n_agent_max = 0
-    n_agent_sim = 0
-    n_agent_no_sim = 0
-    data_len = 0
+    # preprocessing: convert scnearios list to list of tuples (scenario, start_iter)
+    scenarios_with_idx = get_start_idxs_for_scenarios(scenarios, N_STEP)
+    print(
+        f"Converting {len(scenarios_with_idx)} sub-scenarios to {args.dataset} dataset"
+    )
 
-    with h5py.File(out_h5_path, "w") as hf:
-        k = 0
-        for i, scenario in tqdm(
-            enumerate(scenarios),
-            total=len(scenarios),
-            desc="Converting nuPlan Scenarios",
-        ):
-            scenario_len_sec = int(scenario.duration_s.time_s)
-            # episode_len_iter = scenario.get_number_of_iterations()
-            scenario_time_step = scenario.database_interval
-            assert scenario_time_step == 0.1, "Only support 0.1s time step"
-            for j in range(
-                0,
-                int((scenario_len_sec - 1) / scenario_time_step) - (N_STEP - 1),
-                10,
-            ):
-                # try:
-                (
-                    _n_pl_max,
-                    _n_tl_max,
-                    _n_agent_max,
-                    _n_agent_sim,
-                    _n_agent_no_sim,
-                ) = convert_nuplan_scenario(
-                    hf,
-                    k,
-                    scenario,
-                    args.rand_pos,
-                    args.rand_yaw,
-                    pack_all,
-                    pack_history,
-                    args.dest_no_pred,
-                    j,
-                    args.dataset,
-                )
+    convert_func = partial(
+        wrapper_convert_nuplan_scenario,
+        rand_pos=args.rand_pos,
+        rand_yaw=args.rand_yaw,
+        pack_all=pack_all,
+        pack_history=pack_history,
+        dest_no_pred=args.dest_no_pred,
+        split=args.dataset,
+    )
 
-                n_pl_max = max(n_pl_max, _n_pl_max)
-                n_tl_max = max(n_tl_max, _n_tl_max)
-                n_agent_max = max(n_agent_max, _n_agent_max)
-                n_agent_sim = max(n_agent_sim, _n_agent_sim)
-                n_agent_no_sim = max(n_agent_no_sim, _n_agent_no_sim)
-                data_len += 1
+    # Start the writer thread
+    writer_thread = mp.Process(
+        target=write_to_h5_file,
+        args=(out_h5_path, SCENARIO_QUEUE, len(scenarios_with_idx)),
+    )
+    writer_thread.start()
+    # Mulitprocessing the data conversion
+    for batch in tqdm(list(batched(scenarios_with_idx, args.batch_size))):
+        with mp.Pool(args.num_workers) as pool:
+            pool.map(convert_func, batch)
 
-                print(f"data_len: {data_len}, dataset_size: {len(scenarios)}")
-                print(f"n_pl_max: {n_pl_max}")
-                print(
-                    f"n_agent_max: {n_agent_max}, n_agent_sim: {n_agent_sim}, n_agent_no_sim: {n_agent_no_sim}"
-                )
-                hf.attrs["data_len"] = data_len
-                k += 1
-                # except:
-                #     print(f"\nError in scenario {i}: {scenario.log_name}\n")
-                #     continue
-        hf.attrs["version"] = args.version
+    writer_thread.join()
+
+    # with h5py.File(out_h5_path, "w") as hf:
+    #     for batch in tqdm(list(batched(scenarios_with_idx, args.batch_size))):
+    #         with ProcessPoolExecutor(max_workers=args.num_workers) as p:
+    #             res = p.map(convert_func, batch)
+    #             # alternative: starmap from multiprocessing (with mp.Pool)
+
+    #         for sample in res:
+    #             episode, metadata = sample
+    #             hf_episode = hf.create_group(str(metadata["id"]))
+
+    #             for k, v in episode.items():
+    #                 hf_episode.create_dataset(
+    #                     str(k),
+    #                     data=v,
+    #                     compression="gzip",
+    #                     compression_opts=4,
+    #                     shuffle=True,  # shuffling saves memory
+    #                 )
+
+    # n_pl_max = 0
+    # n_tl_max = 0
+    # n_agent_max = 0
+    # n_agent_sim_max = 0
+    # n_agent_no_sim_max = 0
+    # n_route_pl_max = 0
+    # data_len = 0
+
+    # n_pl_max = max(n_pl_max, _n_pl)
+    # n_tl_max = max(n_tl_max, _n_tl)
+    # n_agent_max = max(n_agent_max, _n_agent)
+    # n_agent_sim_max = max(n_agent_sim_max, _n_agent_sim)
+    # n_agent_no_sim_max = max(n_agent_no_sim_max, _n_agent_no_sim)
+    # n_route_pl_max = max(n_route_pl_max, _n_route_pl)
 
 
 if __name__ == "__main__":
