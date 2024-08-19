@@ -5,9 +5,17 @@ import math
 import tempfile
 from dataclasses import dataclass
 from os.path import join
-from typing import Union
+from typing import Union, List, Set
 
 import numpy as np
+
+from nuplan.common.maps.abstract_map import AbstractMap
+from nuplan.common.maps.nuplan_map.utils import (
+    get_distance_between_map_object_and_point,
+)
+from nuplan.planning.training.preprocessing.feature_builders.vector_builder_utils import (
+    prune_route_by_connectivity,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -92,7 +100,7 @@ def get_nuplan_scenarios(
     # Compose the configuration
     overrides = [
         f"group={save_dir}",
-        "worker=ray_distributed",
+        "worker=sequential",
         f"ego_controller={ego_controller}",
         f"observation={observation}",
         f"hydra.searchpath=[{simulation_hydra_paths.common_dir}, {simulation_hydra_paths.experiment_dir}]",
@@ -295,6 +303,88 @@ def parse_ego_vehicle_state_trajectory(
             dt=scenario.database_interval,
         )
     return data
+
+
+def get_route_lane_polylines_from_roadblock_ids(
+    map_api: AbstractMap, point: Point2D, radius: float, route_roadblock_ids: List[str]
+) -> Union[List[List[List[float]]], List[int]]:
+    """
+    Mostly copied from: nuplan.planning.training.preprocessing.feature_builders.vector_builder_utils
+
+    Extract route polylines from map for route specified by list of roadblock ids. Route is represented as collection of
+        baseline polylines of all children lane/lane connectors or roadblock/roadblock connectors encompassing route.
+    :param map_api: map to perform extraction on.
+    :param point: [m] x, y coordinates in global frame.
+    :param radius: [m] floating number about extraction query range.
+    :param route_roadblock_ids: ids of roadblocks/roadblock connectors specifying route.
+    :return: A route as sequence of lane/lane connector polylines AND lane/lane connector ids.
+    """
+    # shape: [num_lanes, num_points_per_lane (variable), 2]
+    route_lane_polylines: List[List[List[float]]] = []
+    map_objects = []
+    map_objects_id = []
+
+    # extract roadblocks/connectors within query radius to limit route consideration
+    layer_names = [SemanticMapLayer.ROADBLOCK, SemanticMapLayer.ROADBLOCK_CONNECTOR]
+    layers = map_api.get_proximal_map_objects(point, radius, layer_names)
+    roadblock_ids: Set[str] = set()
+
+    for layer_name in layer_names:
+        roadblock_ids = roadblock_ids.union(
+            {map_object.id for map_object in layers[layer_name]}
+        )
+    # prune route by connected roadblocks within query radius
+    route_roadblock_ids = prune_route_by_connectivity(
+        route_roadblock_ids, roadblock_ids
+    )
+
+    for route_roadblock_id in route_roadblock_ids:
+        # roadblock
+        roadblock_obj = map_api.get_map_object(
+            route_roadblock_id, SemanticMapLayer.ROADBLOCK
+        )
+
+        # roadblock connector
+        if not roadblock_obj:
+            roadblock_obj = map_api.get_map_object(
+                route_roadblock_id, SemanticMapLayer.ROADBLOCK_CONNECTOR
+            )
+
+        # represent roadblock/connector by interior lanes/connectors
+        if roadblock_obj:
+            map_objects += roadblock_obj.interior_edges
+
+    # sort by distance to query point
+    map_objects.sort(
+        key=lambda map_obj: float(
+            get_distance_between_map_object_and_point(point, map_obj)
+        )
+    )
+
+    for map_obj in map_objects:
+        map_objects_id.append(map_obj.id)
+        baseline_path_polyline = [
+            [node.x, node.y] for node in map_obj.baseline_path.discrete_path
+        ]
+        route_lane_polylines.append(baseline_path_polyline)
+
+    return route_lane_polylines, map_objects_id
+
+
+def get_start_idxs_for_scenarios(scenarios, n_step):
+    scenario_start_idx_tuples = []
+    for scenario in scenarios:
+        scenario_len_sec = int(scenario.duration_s.time_s)
+        # episode_len_iter = scenario.get_number_of_iterations()
+        scenario_time_step = scenario.database_interval
+        assert scenario_time_step == 0.1, "Only support 0.1s time step"
+        for iteration in range(
+            0,
+            int((scenario_len_sec - 1) / scenario_time_step) - (n_step - 1),
+            10,
+        ):
+            scenario_start_idx_tuples.append((scenario, iteration))
+    return scenario_start_idx_tuples
 
 
 # only for example using
