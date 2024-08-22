@@ -78,7 +78,8 @@ class DataH5nuplan(LightningDataModule):
 
         n_step = 91
         n_step_history = 11
-        n_agent_no_sim = 0
+        n_agent_max = 800
+        n_agent_no_sim = n_agent_max - n_agent
         n_pl = 1024
         n_pl_route = 200
         n_pl_type = 9
