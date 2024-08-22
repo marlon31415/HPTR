@@ -362,6 +362,8 @@ def get_route_lane_polylines_from_roadblock_ids(
     )
 
     for map_obj in map_objects:
+        # print(f"centerline length: {map_obj.baseline_path.length}")
+        # print(f"centerline points: {len(map_obj.baseline_path.discrete_path)}")
         map_objects_id.append(map_obj.id)
         baseline_path_polyline = [
             [node.x, node.y] for node in map_obj.baseline_path.discrete_path
@@ -371,8 +373,9 @@ def get_route_lane_polylines_from_roadblock_ids(
     return route_lane_polylines, map_objects_id
 
 
-def get_start_idxs_for_scenarios(scenarios, n_step):
-    scenario_start_idx_tuples = []
+def get_id_and_start_idx_for_scenarios(scenarios, n_step):
+    scenario_id_start_idx_tuples = []
+    id = 0
     for scenario in scenarios:
         scenario_len_sec = int(scenario.duration_s.time_s)
         # episode_len_iter = scenario.get_number_of_iterations()
@@ -383,8 +386,9 @@ def get_start_idxs_for_scenarios(scenarios, n_step):
             int((scenario_len_sec - 1) / scenario_time_step) - (n_step - 1),
             10,
         ):
-            scenario_start_idx_tuples.append((scenario, iteration))
-    return scenario_start_idx_tuples
+            scenario_id_start_idx_tuples.append((scenario, iteration, id))
+            id += 1
+    return scenario_id_start_idx_tuples
 
 
 # only for example using
