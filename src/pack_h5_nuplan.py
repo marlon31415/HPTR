@@ -44,7 +44,7 @@ from src.utils.pack_h5_nuplan_utils import (
     extract_centerline,
     mock_2d_to_3d_points,
     get_route_lane_polylines_from_roadblock_ids,
-    get_start_idxs_for_scenarios,
+    get_id_and_start_idx_for_scenarios,
 )
 
 SCENARIO_QUEUE = mp.Manager().Queue()
@@ -100,13 +100,13 @@ N_AGENT_TYPE = len(set(AGENT_TYPES.values()))
 
 N_PL_MAX = 2000
 N_TL_MAX = 40
-N_AGENT_MAX = 500
-N_PL_ROUTE_MAX = 200
+N_AGENT_MAX = 800
+N_PL_ROUTE_MAX = 250
 
 N_PL = 1024
 N_TL = 200  # due to polyline splitting this value can be higher than N_TL_MAX
 N_AGENT = 64
-N_AGENT_NO_SIM = 256
+N_AGENT_NO_SIM = N_AGENT_MAX - N_AGENT
 N_PL_ROUTE = N_PL_ROUTE_MAX
 
 THRESH_MAP = 120
@@ -505,6 +505,7 @@ def collate_route_features(scenario, center, agent_id, agent_role, radius=200):
     route_lane_polylines = []
     pl_types = []
     for polyline in polylines:
+
         polyline_centered = nuplan_to_centered_vector(polyline, center)
         route_lane_polylines.append(mock_2d_to_3d_points(polyline_centered)[::10])
         pl_types.append(PL_TYPES["ROUTE"])
@@ -691,9 +692,9 @@ def convert_nuplan_scenario(
 
     episode_name = os.path.splitext(scenario.token)[0] + "_" + str(iteration)
     episode_metadata = {
-        "id": episode_name,
-        "center": scenario_center,
-        "yaw": scenario_yaw,
+        "scenario_id": episode_name,
+        "scenario_center": scenario_center,
+        "scenario_yaw": scenario_yaw,
         "with_map": episode_with_map,
     }
 
@@ -710,9 +711,9 @@ def convert_nuplan_scenario(
 
 
 def wrapper_convert_nuplan_scenario(
-    scenario_with_idx, rand_pos, rand_yaw, pack_all, pack_history, dest_no_pred, split
+    scenario_tuple, rand_pos, rand_yaw, pack_all, pack_history, dest_no_pred, split
 ):
-    scenario, iteration = scenario_with_idx
+    scenario, iteration, id = scenario_tuple
     episode, metadata, n_pl, n_tl, n_agent, n_agent_sim, n_agent_no_sim, n_route_pl = (
         convert_nuplan_scenario(
             scenario,
@@ -725,8 +726,18 @@ def wrapper_convert_nuplan_scenario(
             split,
         )
     )
+    metadata["hf_group_id"] = id
     SCENARIO_QUEUE.put((episode, metadata))
-    return episode, metadata
+    return (
+        episode,
+        metadata,
+        n_pl,
+        n_tl,
+        n_agent,
+        n_agent_sim,
+        n_agent_no_sim,
+        n_route_pl,
+    )
 
 
 def write_to_h5_file(h5_file_path, queue, total_items):
@@ -734,7 +745,7 @@ def write_to_h5_file(h5_file_path, queue, total_items):
         for _ in range(total_items):
             data, metadata = queue.get()
             # Create a group for each item
-            group = h5_file.create_group(metadata["id"])
+            group = h5_file.create_group(str(metadata["hf_group_id"]))
             # Store the transformed data in a dataset within the group
             for k, v in data.items():
                 group.create_dataset(
@@ -784,7 +795,7 @@ def main():
     if not args.mini:
         out_h5_path = out_path / (args.dataset + ".h5")
     else:
-        out_h5_path = out_path / (args.dataset + "_mini" + ".h5")
+        out_h5_path = out_path / (args.dataset + "_mini_" + ".h5")
 
     if args.test:
         data_root = os.path.join(args.data_dir, "nuplan-v1.1/splits/mini")
@@ -797,10 +808,15 @@ def main():
     print(f"Converting {len(scenarios)} scenarios to {args.dataset} dataset")
 
     # preprocessing: convert scnearios list to list of tuples (scenario, start_iter)
-    scenarios_with_idx = get_start_idxs_for_scenarios(scenarios, N_STEP)
-    print(
-        f"Converting {len(scenarios_with_idx)} sub-scenarios to {args.dataset} dataset"
-    )
+    scenario_tuples = get_id_and_start_idx_for_scenarios(scenarios, N_STEP)
+    print(f"Converting {len(scenario_tuples)} sub-scenarios to {args.dataset} dataset")
+
+    n_pl_max = 0
+    n_tl_max = 0
+    n_agent_max = 0
+    n_agent_sim_max = 0
+    n_agent_no_sim_max = 0
+    n_route_pl_max = 0
 
     convert_func = partial(
         wrapper_convert_nuplan_scenario,
@@ -815,18 +831,27 @@ def main():
     # Start the writer thread
     writer_thread = mp.Process(
         target=write_to_h5_file,
-        args=(out_h5_path, SCENARIO_QUEUE, len(scenarios_with_idx)),
+        args=(out_h5_path, SCENARIO_QUEUE, len(scenario_tuples)),
     )
     writer_thread.start()
     # Mulitprocessing the data conversion
-    for batch in tqdm(list(batched(scenarios_with_idx, args.batch_size))):
+    for batch in tqdm(list(batched(scenario_tuples, args.batch_size))):
         with mp.Pool(args.num_workers) as pool:
-            pool.map(convert_func, batch)
+            res = pool.map(convert_func, batch)
+
+        res_reordered_zip = zip(*res)
+        res_reordered = list(res_reordered_zip)
+        n_pl_max = max(n_pl_max, max(res_reordered[2]))
+        n_tl_max = max(n_tl_max, max(res_reordered[3]))
+        n_agent_max = max(n_agent_max, max(res_reordered[4]))
+        n_agent_sim_max = max(n_agent_sim_max, max(res_reordered[5]))
+        n_agent_no_sim_max = max(n_agent_no_sim_max, max(res_reordered[6]))
+        n_route_pl_max = max(n_route_pl_max, max(res_reordered[7]))
 
     writer_thread.join()
 
     # with h5py.File(out_h5_path, "w") as hf:
-    #     for batch in tqdm(list(batched(scenarios_with_idx, args.batch_size))):
+    #     for batch in tqdm(list(batched(scenario_tuples, args.batch_size))):
     #         with ProcessPoolExecutor(max_workers=args.num_workers) as p:
     #             res = p.map(convert_func, batch)
     #             # alternative: starmap from multiprocessing (with mp.Pool)
@@ -844,20 +869,12 @@ def main():
     #                     shuffle=True,  # shuffling saves memory
     #                 )
 
-    # n_pl_max = 0
-    # n_tl_max = 0
-    # n_agent_max = 0
-    # n_agent_sim_max = 0
-    # n_agent_no_sim_max = 0
-    # n_route_pl_max = 0
-    # data_len = 0
-
-    # n_pl_max = max(n_pl_max, _n_pl)
-    # n_tl_max = max(n_tl_max, _n_tl)
-    # n_agent_max = max(n_agent_max, _n_agent)
-    # n_agent_sim_max = max(n_agent_sim_max, _n_agent_sim)
-    # n_agent_no_sim_max = max(n_agent_no_sim_max, _n_agent_no_sim)
-    # n_route_pl_max = max(n_route_pl_max, _n_route_pl)
+    print(f"n_pl_max: {n_pl_max}")
+    print(f"n_route_pl_max: {n_route_pl_max}")
+    print(f"n_tl_max: {n_tl_max}")
+    print(f"n_agent_max: {n_agent_max}")
+    print(f"n_agent_sim_max: {n_agent_sim_max}")
+    print(f"n_agent_no_sim_max: {n_agent_no_sim_max}")
 
 
 if __name__ == "__main__":
