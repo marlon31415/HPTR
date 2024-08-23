@@ -52,6 +52,10 @@
   - Download the [Argoverse 2 Motion Forecasting Dataset](https://www.argoverse.org/av2.html#download-link).
   - Run `python src/pack_h5_av2.py` or use [bash/pack_h5.sh](bash/pack_h5.sh) to pack the dataset into h5 files to accelerate data loading during the training and evaluation.
   - You should pack three datasets: `training`, `validation` and `testing`. Each dataset should take a few hours.
+- nuPlan Dataset:
+  - Download the [nuPlan Dataset](https://www.nuscenes.org/nuplan).
+  - Run `python src/pack_h5_nuplan.py` to pack the dataset into h5 files to accelerate data loading during the training and evaluation.
+  - You should pack three datasets: `training`, `validation` and `testing`. Each dataset should take a few hours.
 
 
 ## Training, Validation, Testing and Submission
