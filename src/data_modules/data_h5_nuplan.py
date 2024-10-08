@@ -81,7 +81,7 @@ class DataH5nuplan(LightningDataModule):
         n_agent_max = 800
         n_agent_no_sim = n_agent_max - n_agent
         n_pl = 1024
-        n_pl_route = 200
+        n_pl_route = 250
         n_pl_type = 9
         n_tl = 200
         n_tl_stop = 40
