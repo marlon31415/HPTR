@@ -2,7 +2,9 @@
 from typing import Optional
 from pathlib import Path
 import wandb
-from pytorch_lightning import Callback, Trainer
+import torch
+import torch.nn as nn
+from pytorch_lightning import Callback, Trainer, LightningModule
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import LoggerCollection, WandbLogger
 from pytorch_lightning.utilities import rank_zero_only
@@ -41,9 +43,16 @@ class ModelCheckpointWB(ModelCheckpoint):
             self.last_model_path: self.current_score,
             self.best_model_path: self.best_model_score,
         }
-        checkpoints = sorted((Path(p).stat().st_mtime, p, s) for p, s in checkpoints.items() if Path(p).is_file())
+        checkpoints = sorted(
+            (Path(p).stat().st_mtime, p, s)
+            for p, s in checkpoints.items()
+            if Path(p).is_file()
+        )
         checkpoints = [
-            c for c in checkpoints if c[1] not in self._logged_model_time.keys() or self._logged_model_time[c[1]] < c[0]
+            c
+            for c in checkpoints
+            if c[1] not in self._logged_model_time.keys()
+            or self._logged_model_time[c[1]] < c[0]
         ]
         # log iteratively all new checkpoints
         for t, p, s in checkpoints:
@@ -65,7 +74,9 @@ class ModelCheckpointWB(ModelCheckpoint):
                     if hasattr(self, k)
                 },
             }
-            artifact = wandb.Artifact(name=wb_logger.experiment.id, type="model", metadata=metadata)
+            artifact = wandb.Artifact(
+                name=wb_logger.experiment.id, type="model", metadata=metadata
+            )
             artifact.add_file(p, name="model.ckpt")
             aliases = ["latest", "best"] if p == self.best_model_path else ["latest"]
             wb_logger.experiment.log_artifact(artifact, aliases=aliases)
@@ -83,3 +94,99 @@ class WatchModel(Callback):
     def on_train_start(self, trainer, pl_module):
         logger = get_wandb_logger(trainer)
         logger.watch(model=trainer.model, log=self._log, log_freq=self._log_freq)
+
+
+class TracingWrapper(nn.Module):
+    def __init__(self, model, input_keys, batch_idx):
+        super().__init__()
+        self.model = model
+        self.input_keys = input_keys
+        self.batch_idx = batch_idx
+
+    def forward(self, *inputs):
+        # Convert tuple of tensors into a dictionary using input_keys
+        input_dict = {key: tensor for key, tensor in zip(self.input_keys, inputs)}
+        return self.model(input_dict, self.batch_idx)
+
+
+class TorchOnesBool(torch.Tensor):
+    @staticmethod
+    def __new__(cls, size) -> "TorchOnesBool":
+        # Create a tensor of ones of type bool
+        tensor = super().__new__(cls, torch.ones(*size, dtype=torch.bool))
+        return tensor
+
+    def __init__(self, size) -> None:
+        pass
+
+
+class TorchScriptLogger(Callback):
+    """Logs a torch.jit.trace model to Weights & Biases."""
+
+    def __init__(self, log_dir: str = "checkpoints/", input_sample=None, batch_idx=0):
+        super().__init__()
+        self.log_dir = log_dir
+        self.input_sample = input_sample
+        self.batch_idx = batch_idx
+
+    def on_train_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Called at the end of training to trace and log the model."""
+        logger = get_wandb_logger(trainer)
+        if logger is not None:
+            # Create the log directory if it doesn't exist
+            Path(self.log_dir).mkdir(parents=True, exist_ok=True)
+
+            # Trace the model
+            if self.input_sample is None:
+                raise ValueError("Input sample for torch.jit.trace is not provided.")
+
+            input_keys = [
+                "input/target_valid",
+                "input/target_type",
+                "input/target_attr",
+                "input/other_valid",
+                "input/other_attr",
+                "input/tl_valid",
+                "input/tl_attr",
+                "input/map_valid",
+                "input/map_attr",
+                "ref_pos",
+                "ref_rot",
+                "agent/valid",
+                "agent/pos",
+                "agent/vel",
+                "agent/spd",
+                "agent/acc",
+                "agent/yaw_bbox",
+                "agent/yaw_rate",
+                "agent/type",
+                "agent/role",
+                "agent/size",
+                "agent/cmd",
+                "map/valid",
+                "map/type",
+                "map/pos",
+                "map/dir",
+                "tl_stop/valid",
+                "tl_stop/state",
+                "tl_stop/pos",
+                "tl_stop/dir",
+            ]
+            wrapped_model = TracingWrapper(trainer.model, input_keys, self.batch_idx)
+
+            # input_samples_list = list(self.input_sample.values())
+            input_tuple = tuple(self.input_sample[key] for key in input_keys)
+            # traced_model = torch.jit.trace(pl_module, input_samples_list)
+            traced_model = torch.jit.trace(wrapped_model, input_tuple)
+
+            # Save the traced model
+            traced_model_path = Path(self.log_dir) / "traced_model.pt"
+            traced_model.save(traced_model_path)
+
+            # Log the model to wandb as an artifact
+            artifact = wandb.Artifact(
+                name=f"{logger.experiment.id}_traced_model", type="model"
+            )
+            artifact.add_file(str(traced_model_path), name="traced_model.pt")
+            logger.experiment.log_artifact(artifact, aliases=["traced"])
+            print(f"Traced model saved and uploaded to W&B: {traced_model_path}")
