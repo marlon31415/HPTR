@@ -125,6 +125,12 @@ class AgentCentricGlobal(nn.Module):
                 "ac/tl_state": [n_scene, n_target, n_step_hist, n_tl, 5], bool one_hot
                 "ac/tl_pos": [n_scene, n_target, n_step_hist, n_tl, 2], x,y
                 "ac/tl_dir": [n_scene, n_target, n_step_hist, n_tl, 2], x,y
+            # route
+                "ac/route_valid": [n_scene, n_target, n_route, n_pl_node], bool
+                "ac/route_type": [n_scene, n_target, n_route, 11], bool one_hot
+                "ac/route_pos": [n_scene, n_target, n_route, n_pl_node, 2], float32
+                "ac/route_dir": [n_scene, n_target, n_route, n_pl_node, 2], float32
+
 
         Returns: add following keys to batch Dict
             # target type: no need to be aggregated.
@@ -144,6 +150,8 @@ class AgentCentricGlobal(nn.Module):
                     "input/other_attr": [n_scene, n_target, n_other, n_step_hist, agent_attr_dim]
                     "input/map_valid": [n_scene, n_target, n_map, n_pl_node], bool
                     "input/map_attr": [n_scene, n_target, n_map, n_pl_node, map_attr_dim]
+                    "input/route_valid": [n_scene, n_target, n_route, n_pl_node], bool
+                    "input/route_attr": [n_scene, n_target, n_route, n_pl_node, map_attr_dim]
             # traffic lights: stop point, cannot be aggregated, detections are not tracked, singular node polyline.
                 if use_current_tl:
                     "input/tl_valid": [n_scene, n_target, 1, n_tl], bool
@@ -158,6 +166,7 @@ class AgentCentricGlobal(nn.Module):
         batch["input/other_valid"] = batch["ac/other_valid"] & valid  # [n_scene, n_target, n_other, n_step_hist]
         batch["input/tl_valid"] = batch["ac/tl_valid"] & valid  # [n_scene, n_target, n_step_hist, n_tl]
         batch["input/map_valid"] = batch["ac/map_valid"] & valid  # [n_scene, n_target, n_map, n_pl_node]
+        batch["input/route_valid"] = batch["ac/route_valid"] & valid  # [n_scene, n_target, n_route, n_pl_node]
 
         # ! randomly mask history target/other/tl
         if self.training and (0 < self.dropout_p_history <= 1.0):
@@ -169,6 +178,8 @@ class AgentCentricGlobal(nn.Module):
             batch["input/tl_valid"] &= torch.bernoulli(prob_mask).bool()
             prob_mask = torch.ones_like(batch["input/map_valid"]) * (1 - self.dropout_p_history)
             batch["input/map_valid"] &= torch.bernoulli(prob_mask).bool()
+            prob_mask = torch.ones_like(batch["input/route_valid"]) * (1 - self.dropout_p_history)
+            batch["input/route_valid"] &= torch.bernoulli(prob_mask).bool()
 
         # ! prepare "input/target_attr"
         if self.pl_aggr:  # [n_scene, n_target, agent_attr_dim]
@@ -262,6 +273,15 @@ class AgentCentricGlobal(nn.Module):
                 dim=-1,
             )
 
+        # ! prepare "input/route_attr": [n_scene, n_target, n_route, n_pl_node, map_attr_dim]
+        batch["input/route_attr"] = torch.cat(
+            [
+                self.pose_pe_map(batch["ac/route_pos"], batch["ac/route_dir"]),  # pl_dim
+                batch["ac/route_type"].unsqueeze(-2).expand(-1, -1, -1, self.n_pl_node, -1),  # n_map_type
+            ],
+            dim=-1,
+        )
+
         # ! prepare "input/tl_attr": [n_scene, n_target, n_step_hist/1, n_tl, tl_attr_dim]
         # [n_scene, n_target, n_step_hist, n_tl, 2]
         tl_pos = batch["ac/tl_pos"]
@@ -278,6 +298,7 @@ class AgentCentricGlobal(nn.Module):
         if self.add_ohe:
             n_scene, n_target, n_other, _ = batch["ac/other_valid"].shape
             n_map = batch["ac/map_valid"].shape[2]
+            n_route = batch["ac/route_valid"].shape[2]
             if not self.pl_aggr:  # there is no need to add ohe if pl_aggr
                 batch["input/target_attr"] = torch.cat(
                     [
@@ -297,6 +318,13 @@ class AgentCentricGlobal(nn.Module):
                     [
                         batch["input/map_attr"],
                         self.pl_node_ohe[None, None, None, :, :].expand(n_scene, n_target, n_map, -1, -1),
+                    ],
+                    dim=-1,
+                )
+                batch["input/route_attr"] = torch.cat(
+                    [
+                        batch["input/route_attr"],
+                        self.pl_node_ohe[None, None, None, :, :].expand(n_scene, n_target, n_route, -1, -1),
                     ],
                     dim=-1,
                 )
