@@ -75,6 +75,8 @@ class AgentCentricPreProcessing(nn.Module):
                 "gt/vel": [n_scene, n_target, n_step_future, 2]
                 "gt/yaw_bbox": [n_scene, n_target, n_step_future, 1]
                 "gt/cmd": [n_scene, n_target, 8]
+                "gt/route_valid": [n_scene, n_target, n_pl_route, n_pl_node]
+                "gt/route_pos": [n_scene, n_target, n_pl_route, n_pl_node, 2]
             # (ac) agent-centric target agents states
                 "ac/target_valid": [n_scene, n_target, n_step_hist]
                 "ac/target_pos": [n_scene, n_target, n_step_hist, 2]
@@ -269,6 +271,10 @@ class AgentCentricPreProcessing(nn.Module):
                 .unsqueeze(1)
                 .repeat(1, self.n_target, 1, 1, 1)[other_scene_indices, other_target_indices, route_indices]
             )
+
+        batch["gt/route_valid"] = batch["ac/route_valid"]
+        batch["gt/route_pos"] = batch["ac/route_pos"]
+
         # target_pos: [n_scene, n_target, 1, 2], target_rot: [n_scene, n_target, 2, 2]
         # [n_scene, n_target, n_route, n_pl_node, 2]
         batch["ac/route_pos"] = torch_pos2local(batch["ac/route_pos"], ref_pos.unsqueeze(2), ref_rot.unsqueeze(2))
