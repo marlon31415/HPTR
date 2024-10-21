@@ -15,6 +15,7 @@ class AgentCentricGlobal(nn.Module):
         use_current_tl: bool,
         add_ohe: bool,
         pl_aggr: bool,
+        pl_aggr_route: bool,
         pose_pe: DictConfig,
     ) -> None:
         super().__init__()
@@ -24,11 +25,13 @@ class AgentCentricGlobal(nn.Module):
         self.use_current_tl = use_current_tl
         self.add_ohe = add_ohe
         self.pl_aggr = pl_aggr
+        self.pl_aggr_route = pl_aggr_route
         self.n_pl_node = data_size["map/valid"][-1]
 
         self.pose_pe_agent = PosePE(pose_pe["agent"])
         self.pose_pe_map = PosePE(pose_pe["map"])
         self.pose_pe_tl = PosePE(pose_pe["tl"])
+        self.pose_pe_route = PosePE(pose_pe["route"])
 
         tl_attr_dim = self.pose_pe_tl.out_dim + data_size["tl_stop/state"][-1]
         if self.pl_aggr:
@@ -54,12 +57,17 @@ class AgentCentricGlobal(nn.Module):
                 + data_size["agent/type"][-1]  # 3
             )
             map_attr_dim = self.pose_pe_map.out_dim + data_size["map/type"][-1]
+        if self.pl_aggr_route:
+            route_attr_dim = self.pose_pe_route.out_dim * self.n_pl_node + data_size["route/type"][-1] + self.n_pl_node
+        else:
+            route_attr_dim = self.pose_pe_route.out_dim + data_size["route/type"][-1]
 
         if self.add_ohe:
             self.register_buffer("history_step_ohe", torch.eye(self.n_step_hist))
             self.register_buffer("pl_node_ohe", torch.eye(self.n_pl_node))
             if not self.pl_aggr:
                 map_attr_dim += self.n_pl_node
+                route_attr_dim += self.n_pl_node
                 agent_attr_dim += self.n_step_hist
             if not self.use_current_tl:
                 tl_attr_dim += self.n_step_hist
@@ -68,10 +76,12 @@ class AgentCentricGlobal(nn.Module):
             "agent_attr_dim": agent_attr_dim,
             "map_attr_dim": map_attr_dim,
             "tl_attr_dim": tl_attr_dim,
+            "route_attr_dim": route_attr_dim,
             "n_step_hist": self.n_step_hist,
             "n_pl_node": self.n_pl_node,
             "use_current_tl": self.use_current_tl,
             "pl_aggr": self.pl_aggr,
+            "pl_aggr_route": self.pl_aggr_route,
         }
 
     def forward(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
@@ -143,6 +153,8 @@ class AgentCentricGlobal(nn.Module):
                     "input/other_attr": [n_scene, n_target, n_other, agent_attr_dim]
                     "input/map_valid": [n_scene, n_target, n_map], bool
                     "input/map_attr": [n_scene, n_target, n_map, map_attr_dim]
+                    "input/route_valid": [n_scene, n_target, n_route], bool
+                    "input/route_attr": [n_scene, n_target, n_route, route_attr_dim]
                 else:
                     "input/target_valid": [n_scene, n_target, n_step_hist], bool
                     "input/target_attr": [n_scene, n_target, n_step_hist, agent_attr_dim]
@@ -151,7 +163,7 @@ class AgentCentricGlobal(nn.Module):
                     "input/map_valid": [n_scene, n_target, n_map, n_pl_node], bool
                     "input/map_attr": [n_scene, n_target, n_map, n_pl_node, map_attr_dim]
                     "input/route_valid": [n_scene, n_target, n_route, n_pl_node], bool
-                    "input/route_attr": [n_scene, n_target, n_route, n_pl_node, map_attr_dim]
+                    "input/route_attr": [n_scene, n_target, n_route, n_pl_node, route_attr_dim]
             # traffic lights: stop point, cannot be aggregated, detections are not tracked, singular node polyline.
                 if use_current_tl:
                     "input/tl_valid": [n_scene, n_target, 1, n_tl], bool
@@ -274,13 +286,28 @@ class AgentCentricGlobal(nn.Module):
             )
 
         # ! prepare "input/route_attr": [n_scene, n_target, n_route, n_pl_node, map_attr_dim]
-        batch["input/route_attr"] = torch.cat(
-            [
-                self.pose_pe_map(batch["ac/route_pos"], batch["ac/route_dir"]),  # pl_dim
-                batch["ac/route_type"].unsqueeze(-2).expand(-1, -1, -1, self.n_pl_node, -1),  # n_map_type
-            ],
-            dim=-1,
-        )
+        if self.pl_aggr_route:  # [n_scene, n_target, n_map, map_attr_dim]
+            route_invalid = ~batch["input/route_valid"].unsqueeze(-1)
+            route_invalid_reduced = route_invalid.all(-2)
+            batch["input/route_attr"] = torch.cat(
+                [
+                    self.pose_pe_route(batch["ac/route_pos"], batch["ac/route_dir"])
+                    .masked_fill(route_invalid, 0)
+                    .flatten(-2, -1),
+                    batch["ac/route_type"].masked_fill(route_invalid_reduced, 0),  # n_route_type
+                    batch["input/route_valid"],  # n_pl_node
+                ],
+                dim=-1,
+            )
+            batch["input/route_valid"] = batch["input/route_valid"].any(-1)  # [n_scene, n_target, n_route]
+        else:  # [n_scene, n_target, n_route, n_pl_node, route_attr_dim]
+            batch["input/route_attr"] = torch.cat(
+                [
+                    self.pose_pe_route(batch["ac/route_pos"], batch["ac/route_dir"]),  # pl_dim
+                    batch["ac/route_type"].unsqueeze(-2).expand(-1, -1, -1, self.n_pl_node, -1),  # n_route_type
+                ],
+                dim=-1,
+            )
 
         # ! prepare "input/tl_attr": [n_scene, n_target, n_step_hist/1, n_tl, tl_attr_dim]
         # [n_scene, n_target, n_step_hist, n_tl, 2]
@@ -321,6 +348,7 @@ class AgentCentricGlobal(nn.Module):
                     ],
                     dim=-1,
                 )
+            if not self.pl_aggr_route:  # there is no need to add ohe if pl_aggr_route
                 batch["input/route_attr"] = torch.cat(
                     [
                         batch["input/route_attr"],
