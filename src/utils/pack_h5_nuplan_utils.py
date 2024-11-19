@@ -229,10 +229,8 @@ def mock_2d_to_3d_points(points):
     return np.hstack([points, np.zeros((points.shape[0], 1))])
 
 
-def set_light_position(scenario, lane_id, center, target_position=8):
-    lane = scenario.map_api.get_map_object(
-        str(lane_id), SemanticMapLayer.LANE_CONNECTOR
-    )
+def set_light_position(map_api, lane_id, center, target_position=8):
+    lane = map_api.get_map_object(str(lane_id), SemanticMapLayer.LANE_CONNECTOR)
     assert lane is not None, "Can not find lane: {}".format(lane_id)
     path = lane.baseline_path.discrete_path
     acc_length = 0

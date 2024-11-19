@@ -292,7 +292,7 @@ def collate_tl_features(scenario, center, start_iter):
         tl_lane_id.append(list(frame.keys()))
         tl_stop_point_frame = []
         for lane_id in frame.keys():
-            light_pos = set_light_position(scenario, lane_id, center)
+            light_pos = set_light_position(scenario.map_api, lane_id, center)
             tl_stop_point_frame.append(light_pos)
         if tl_stop_point_frame:
             tl_stop_point.append(mock_2d_to_3d_points(tl_stop_point_frame))
