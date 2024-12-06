@@ -369,7 +369,7 @@ def pack_episode_route(
     sdc_route_id: List[List[int]],
     sdc_route_type: List[List[int]],
     sdc_route_xyz: List[List[List[float]]],
-    sdc_route_goal: np.ndarray,
+    sdc_route_goal: List[np.ndarray],
     n_route_pl_max: int,
     n_nodes: int = 20,
 ) -> int:
@@ -390,6 +390,7 @@ def pack_episode_route(
     sdc_route_id = sdc_route_id[0]
     sdc_route_type = sdc_route_type[0]
     sdc_route_xyz = sdc_route_xyz[0]
+    sdc_route_goal = sdc_route_goal[0]
 
     pl_counter = 0
     for i_pl in range(len(sdc_route_id)):
@@ -807,6 +808,7 @@ def repack_episode_route(
     episode_reduced["route/id"] = episode["route/id"].copy()
     # one_hot "map/type": [N_PL, N_PL_TYPE], bool
     episode_reduced["route/type"] = np.eye(n_pl_type, dtype=bool)[episode["route/type"]]
+    episode_reduced["route/goal"] = episode["route/goal"].copy()
 
 
 def repack_episode_agents_no_sim(

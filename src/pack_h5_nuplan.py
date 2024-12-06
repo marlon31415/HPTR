@@ -48,7 +48,6 @@ from nuplan.planning.simulation.simulation_time_controller.simulation_iteration 
     SimulationIteration,
 )
 
-SCENARIO_QUEUE = mp.Manager().Queue()
 
 TL_TYPES = {
     "GREEN": 3,
@@ -367,7 +366,9 @@ def collate_map_features(map_api, scenario_center, radius=200):
     return mf_id, mf_xyz, mf_type, mf_edge
 
 
-def collate_route_features(map_api, scenario_center, route_roadblock_ids, radius=200):
+def collate_route_features(
+    map_api, scenario_center, route_roadblock_ids, mission_goal, radius=200
+):
     scenario_center_tuple = [scenario_center.x, scenario_center.y]
 
     # id=-1 is the default nuplan value for the ego; TODO: change this if needed
@@ -375,6 +376,7 @@ def collate_route_features(map_api, scenario_center, route_roadblock_ids, radius
     sdc_route_type = []
     sdc_route_lane_id = []
     sdc_route_xyz = []
+    sdc_route_goal = []
 
     polylines, route_lane_ids = get_route_lane_polylines_from_roadblock_ids(
         map_api, scenario_center, radius, route_roadblock_ids
@@ -389,11 +391,22 @@ def collate_route_features(map_api, scenario_center, route_roadblock_ids, radius
     sdc_route_type.append(pl_types)
     sdc_route_xyz.append(route_lane_polylines)
 
+    mission_goal_centered_with_yaw = np.hstack(
+        [
+            nuplan_to_centered_vector(
+                [mission_goal.x, mission_goal.y], scenario_center_tuple
+            ),
+            [mission_goal.heading],
+        ]
+    )
+    sdc_route_goal.append(mission_goal_centered_with_yaw)
+
     return (
         sdc_id,
         sdc_route_lane_id,
         sdc_route_type,
         sdc_route_xyz,
+        sdc_route_goal,
     )
 
 
@@ -463,15 +476,6 @@ def convert_nuplan_scenario(
         ego_state.agent for ego_state in current_input.history.ego_states
     ]
     scenario_center = current_input.history.ego_states[-1].center.point
-    mission_goal = initialization.mission_goal
-    mission_goal_centered_with_yaw = np.hstack(
-        [
-            nuplan_to_centered_vector(
-                [mission_goal.x, mission_goal.y], [scenario_center.x, scenario_center.y]
-            ),
-            [mission_goal.heading],
-        ]
-    )
 
     # agents
     agent_id, agent_type, agent_states, agent_role = collate_agent_features(
@@ -494,8 +498,14 @@ def convert_nuplan_scenario(
         map_api, scenario_center, radius
     )
     # route
-    sdc_id, sdc_route_id, sdc_route_type, sdc_route_xyz = collate_route_features(
-        map_api, scenario_center, initialization.route_roadblock_ids, radius
+    sdc_id, sdc_route_id, sdc_route_type, sdc_route_xyz, sdc_route_goal = (
+        collate_route_features(
+            map_api,
+            scenario_center,
+            initialization.route_roadblock_ids,
+            initialization.mission_goal,
+            radius,
+        )
     )
 
     episode = {}
@@ -534,7 +544,7 @@ def convert_nuplan_scenario(
         sdc_route_id=sdc_route_id,
         sdc_route_type=sdc_route_type,
         sdc_route_xyz=sdc_route_xyz,
-        sdc_route_goal=mission_goal_centered_with_yaw,
+        sdc_route_goal=sdc_route_goal,
         n_route_pl_max=N_PL_ROUTE_MAX,
     )
     scenario_center, scenario_yaw = pack_utils.center_at_sdc(
@@ -817,4 +827,5 @@ def main():
 
 
 if __name__ == "__main__":
+    SCENARIO_QUEUE = mp.Manager().Queue()
     main()
