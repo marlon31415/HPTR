@@ -369,6 +369,7 @@ def pack_episode_route(
     sdc_route_id: List[List[int]],
     sdc_route_type: List[List[int]],
     sdc_route_xyz: List[List[List[float]]],
+    sdc_route_goal: np.ndarray,
     n_route_pl_max: int,
     n_nodes: int = 20,
 ) -> int:
@@ -377,6 +378,7 @@ def pack_episode_route(
         sdc_id: [n_sdc]; n_sdc = 1
         sdc_route_id: [n_sdc, n_lanes_route, ]
         sdc_route_xyz: [n_sdc, n_lanes_route, xyz]
+        sdc_route_goal: np.array([x,y,heading])
     """
     episode["route/valid"] = np.zeros([n_route_pl_max, n_nodes], dtype=bool)
     episode["route/id"] = np.zeros([n_route_pl_max], dtype=np.int64) - 1
@@ -416,6 +418,7 @@ def pack_episode_route(
             episode["route/type"][pl_counter] = sdc_route_type[i_pl]
             episode["route/id"][pl_counter] = sdc_route_id[i_pl]
             pl_counter += 1
+    episode["route/goal"] = sdc_route_goal
     return pl_counter
 
 

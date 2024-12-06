@@ -5,6 +5,18 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import h5py
 
+from src.pack_h5_nuplan import (
+    N_PL_TYPE,
+    N_STEP,
+    STEP_CURRENT,
+    N_TL,
+    N_TL_MAX,
+    N_TL_STATE,
+    N_AGENT_MAX,
+    N_PL_ROUTE_MAX,
+    N_PL,
+)
+
 
 class DatasetBase(Dataset[Dict[str, np.ndarray]]):
     def __init__(self, filepath: str, tensor_size: Dict[str, Tuple]) -> None:
@@ -76,15 +88,16 @@ class DataH5nuplan(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-        n_step = 91
-        n_step_history = 11
-        n_agent_max = 800
+        n_step = N_STEP
+        n_step_history = STEP_CURRENT + 1
+        n_agent_max = N_AGENT_MAX
         n_agent_no_sim = n_agent_max - n_agent
-        n_pl = 1024
-        n_pl_route = 250
-        n_pl_type = 9
-        n_tl = 200
-        n_tl_stop = 40
+        n_pl = N_PL
+        n_pl_route = N_PL_ROUTE_MAX
+        n_pl_type = N_PL_TYPE
+        n_tl = N_TL
+        n_tl_stop = N_TL_MAX
+        n_tl_state = N_TL_STATE
         n_pl_node = 20
         self.tensor_size_train = {
             # agent states
@@ -122,10 +135,10 @@ class DataH5nuplan(LightningDataModule):
             "map/boundary": (4,),  # xmin, xmax, ymin, ymax
             # traffic lights
             "tl_lane/valid": (n_step, n_tl),  # bool
-            "tl_lane/state": (n_step, n_tl, 4),  # bool one_hot
+            "tl_lane/state": (n_step, n_tl, n_tl_state),  # bool one_hot
             "tl_lane/idx": (n_step, n_tl),  # int, -1 means not valid
             "tl_stop/valid": (n_step, n_tl_stop),  # bool
-            "tl_stop/state": (n_step, n_tl_stop, 4),  # bool one_hot
+            "tl_stop/state": (n_step, n_tl_stop, n_tl_state),  # bool one_hot
             "tl_stop/pos": (n_step, n_tl_stop, 2),  # x,y
             "tl_stop/dir": (n_step, n_tl_stop, 2),  # x,y
             # route
@@ -185,10 +198,14 @@ class DataH5nuplan(LightningDataModule):
             "map/boundary": (4,),  # xmin, xmax, ymin, ymax
             # traffic_light
             "history/tl_lane/valid": (n_step_history, n_tl),  # bool
-            "history/tl_lane/state": (n_step_history, n_tl, 4),  # bool one_hot
+            "history/tl_lane/state": (n_step_history, n_tl, n_tl_state),  # bool one_hot
             "history/tl_lane/idx": (n_step_history, n_tl),  # int, -1 means not valid
             "history/tl_stop/valid": (n_step_history, n_tl_stop),  # bool
-            "history/tl_stop/state": (n_step_history, n_tl_stop, 4),  # bool one_hot
+            "history/tl_stop/state": (
+                n_step_history,
+                n_tl_stop,
+                n_tl_state,
+            ),  # bool one_hot
             "history/tl_stop/pos": (n_step_history, n_tl_stop, 2),  # x,y
             "history/tl_stop/dir": (n_step_history, n_tl_stop, 2),  # dx,dy
             # route

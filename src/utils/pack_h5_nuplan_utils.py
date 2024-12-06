@@ -41,8 +41,6 @@ try:
 except ImportError as e:
     raise RuntimeError(e)
 
-NuPlanEgoType = TrackedObjectType.EGO
-
 
 def get_nuplan_scenarios(
     data_root, map_root, logs: Union[list, None] = None, builder="nuplan_mini"
@@ -387,6 +385,214 @@ def get_id_and_start_idx_for_scenarios(scenarios, n_step):
             scenario_id_start_idx_tuples.append((scenario, iteration, id))
             id += 1
     return scenario_id_start_idx_tuples
+
+
+def fill_track_with_state(
+    track_state: dict, state: dict, current_timestep: int
+) -> dict:
+    """
+    Fills a track with the information from the track_obj
+    :param track: the track to fill
+    :param track_obj: the track object
+    :return: the filled track
+    """
+    track_state["position_x"][current_timestep] = state["position"][0]
+    track_state["position_y"][current_timestep] = state["position"][1]
+    track_state["heading"][current_timestep] = state["heading"]
+    track_state["velocity_x"][current_timestep] = state["velocity"][0]
+    track_state["velocity_y"][current_timestep] = state["velocity"][1]
+    track_state["valid"][current_timestep] = state["valid"]
+    track_state["length"][current_timestep] = state["length"]
+    track_state["width"][current_timestep] = state["width"]
+    track_state["height"][current_timestep] = state["height"]
+
+
+def calc_velocity_from_positions(track_state: dict, dt: float) -> None:
+    positions = np.hstack([track_state["position_x"], track_state["position_y"]])
+    velocity = (positions[1:] - positions[:-1]) / dt
+    track_state["velocity_x"][:-1] = velocity[..., 0]
+    track_state["velocity_x"][-1] = track_state["velocity_x"][-2]
+    track_state["velocity_y"][:-1] = velocity[..., 1]
+    track_state["velocity_y"][-1] = track_state["velocity_y"][-2]
+
+
+def get_max_distance_for_challenges(
+    dists_to_ego: list,
+    n_agent_pred_challenge: int,
+    n_agent_interact_challange: int,
+) -> tuple:
+    """
+    Get the distance to the ego for the prediction and interaction challenges
+    :param dists_to_ego: list of distances to the ego
+    :return:
+        predict_dist: distance to the ego for vehicles to be considered in the prediction challenge
+        interest_dist: distance to the ego for vehicles to be considered in the interaction challenge
+    """
+    # dists_to_ego includes the ego vehicle (distance 0)
+    dists_to_ego.sort()
+    predict_dist = (
+        dists_to_ego[n_agent_pred_challenge - 1]
+        if len(dists_to_ego) >= n_agent_pred_challenge
+        else dists_to_ego[-1]
+    )
+    interest_dist = (
+        dists_to_ego[n_agent_interact_challange - 1]
+        if len(dists_to_ego) >= n_agent_interact_challange
+        else dists_to_ego[-1]
+    )
+    return predict_dist, interest_dist
+
+
+def mining_for_interesting_agents(
+    tracks: dict,
+    n_agent_prediction_challenge: int,
+    n_agent_interaction_challenge: int,
+) -> dict:
+    """
+    Here, we will mine for interesting agents to be used in the prediction and interaction challenges.
+
+    Principal from Waymo Open Motion Dataset (https://arxiv.org/pdf/2104.10133): "The training, validation,
+    and testing sets contain up to 8 objects per scenario chosen to include at least 2 objects of each
+    type if available. Selection is biased to include objects that do not follow a constant velocity model
+    or straight paths. For the validation interactive and testing interactive sets, only the mined
+    interactive agent pair objects are included in the list of objects to predict."
+
+    The above principle is not strictly implemented, but the idea is tried to be followed.
+    """
+    prediction_agents_bic = FixedLengthDict(2)
+    prediction_agents_ped = FixedLengthDict(2)
+    prediction_agents_veh = FixedLengthDict(n_agent_prediction_challenge - 1)
+
+    for id, track in tracks.items():
+        type = track["type"]
+        traj_score = calculate_interest_score(track)
+        # search for vehicles
+        if type == 0:
+            if id == "ego":
+                pass
+            else:
+                prediction_agents_veh.add(id, traj_score)
+        # search for pedestrians
+        elif type == 1:
+            prediction_agents_ped.add(id, traj_score)
+        # search for ciclists
+        elif type == 2:
+            prediction_agents_bic.add(id, traj_score)
+
+    # Create list with ids of agents for prediction challenge
+    track_ids_predict = ["ego"]
+    track_ids_predict.extend(list(prediction_agents_bic.data.keys()))
+    track_ids_predict.extend(list(prediction_agents_ped.data.keys()))
+    len_track_ids_predict = len(track_ids_predict)
+    track_ids_predict.extend(
+        prediction_agents_veh.get_top_x_keys(
+            n_agent_prediction_challenge - len_track_ids_predict
+        )
+    )
+
+    # TODO: Get the most interactive agent for the ego vehicle
+    # Currently only the most interesting agetent is selected
+    track_ids_interact = ["ego"]
+    track_ids_interact.extend(
+        prediction_agents_veh.get_top_x_keys(n_agent_interaction_challenge - 1)
+    )
+
+    return track_ids_predict, track_ids_interact
+
+
+def calculate_interest_score(track: dict) -> float:
+    """
+    Calculate the interest score for a trajectory based on the following metrics:
+        - Total heading change
+        - Lateral deviation
+        - Total acceleration
+        - Progress
+    """
+    position_x = track["state"]["position_x"]
+    position_y = track["state"]["position_y"]
+    heading = track["state"]["heading"]
+
+    # Delete all invalid values (=0)
+    position_x = position_x[position_x != 0]
+    position_y = position_y[position_y != 0]
+    heading = heading[heading != 0]
+
+    # 1. Compute Euclidean distance traveled
+    dx = np.diff(position_x)
+    dy = np.diff(position_y)
+    distances = np.sqrt(dx**2 + dy**2)
+    total_progress = np.sum(distances)
+
+    # 2. Compute heading changes (angle of trajectory)
+    angles = np.arctan2(dy, dx)  # Heading angle at each timestep
+    heading_changes = np.abs(np.diff(angles))  # Absolute change in heading
+    total_heading_change = np.sum(heading_changes)
+
+    # 3. Compute lateral deviations for lane changes (approximation)
+    lateral_deviation = normal_distance_2d_with_angle(
+        [position_x[-1], position_y[-1]], [position_x[0], position_y[0]], heading[0]
+    )  # Standard deviation of lateral movement
+
+    # 4. Compute acceleration changes
+    velocity_x = np.diff(position_x)  # First derivative (velocity)
+    velocity_y = np.diff(position_y)
+    acceleration_x = np.diff(velocity_x)  # Second derivative (acceleration)
+    acceleration_y = np.diff(velocity_y)
+    total_acceleration = np.sum(np.sqrt(acceleration_x**2 + acceleration_y**2))
+
+    # Combine scores with weights
+    interest_score = (
+        0.5 * total_heading_change  # Turning
+        + 1 * lateral_deviation  # Lane changes
+        + 2 * total_acceleration  # Acceleration/Deceleration
+        + 0.1 * total_progress  # Progress
+    )
+
+    return interest_score
+
+
+class FixedLengthDict:
+    def __init__(self, max_length):
+        self.data = {}
+        self.max_length = max_length
+
+    def add(self, id, value):
+        # Add the new id-value pair to the dictionary
+        self.data[id] = value
+        # If max length is exceeded, remove the smallest value (based on value)
+        if len(self.data) > self.max_length:
+            # Find the ID of the smallest value
+            smallest_id = min(self.data, key=self.data.get)
+            del self.data[smallest_id]
+
+    def get_top_x_keys(self, x):
+        # Get the keys of the x highest values
+        if x <= 0:
+            return []
+        # Sort by values in descending order and get the top x keys
+        sorted_items = sorted(self.data.items(), key=lambda item: item[1], reverse=True)
+        top_x_keys = [key for key, value in sorted_items[:x]]
+        return top_x_keys
+
+    def __repr__(self):
+        return repr(self.data)
+
+
+def normal_distance_2d_with_angle(point, line_point, angle):
+    # Convert inputs to numpy arrays
+    P = np.array(point)
+    A = np.array(line_point)
+    # Direction vector from angle
+    v = np.array([np.cos(angle), np.sin(angle)])
+    # Vector from A to P
+    AP = P - A
+    # Compute the numerator (perpendicular projection magnitude)
+    numerator = abs(v[1] * AP[0] - v[0] * AP[1])
+    # Compute the denominator (magnitude of the direction vector)
+    denominator = np.linalg.norm(v)
+    # Compute the distance
+    distance = numerator / denominator
+    return distance
 
 
 # only for example using
