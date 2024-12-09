@@ -17,8 +17,8 @@ from tqdm import tqdm
 
 sys.path.append(".")
 
-import src.utils.pack_h5 as pack_utils
-from src.utils.pack_h5_nuplan_utils import (
+from ..src.utils import pack_h5 as pack_utils
+from ..src.utils.pack_h5_nuplan_utils import (
     get_nuplan_scenarios,
     nuplan_to_centered_vector,
     parse_object_state,
