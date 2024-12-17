@@ -595,6 +595,23 @@ def normal_distance_2d_with_angle(point, line_point, angle):
     return distance
 
 
+def create_rectangle_from_points(points):
+    min_x = points[:, 0].min()  # Smallest x
+    max_x = points[:, 0].max()  # Largest x
+    min_y = points[:, 1].min()  # Smallest y
+    max_y = points[:, 1].max()  # Largest y
+
+    return {"min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y}
+
+
+def is_point_in_rectangle(point, bounds):
+    x, y = point
+    return (
+        bounds["min_x"] <= x <= bounds["max_x"]
+        and bounds["min_y"] <= y <= bounds["max_y"]
+    )
+
+
 # only for example using
 example_scenario_types = "[behind_pedestrian_on_pickup_dropoff,  \
                         near_multiple_vehicles, \

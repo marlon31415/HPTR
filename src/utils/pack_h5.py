@@ -385,6 +385,7 @@ def pack_episode_route(
     episode["route/pos"] = np.zeros([n_route_pl_max, n_nodes, 3], dtype=np.float32)
     episode["route/dir"] = np.zeros([n_route_pl_max, n_nodes, 3], dtype=np.float32)
     episode["route/type"] = np.zeros([n_route_pl_max], dtype=np.int64)
+    episode["route/goal"] = np.zeros([3], dtype=np.float32)
 
     sdc_id = sdc_id[0]
     sdc_route_id = sdc_route_id[0]
@@ -459,8 +460,8 @@ def center_at_sdc(
     to_sdc_se3 = transform_utils.get_transformation_matrix(
         sdc_center, sdc_yaw
     )  # for points
-    to_sdc_yaw = transform_utils.get_yaw_from_se2(to_sdc_se3)  # for vector
-    to_sdc_so2 = transform_utils.get_so2_from_se2(to_sdc_se3)  # for angle
+    to_sdc_yaw = transform_utils.get_yaw_from_se2(to_sdc_se3)  # for angle
+    to_sdc_so2 = transform_utils.get_so2_from_se2(to_sdc_se3)  # for vector
 
     # map
     episode["map/pos"][..., :2][episode["map/valid"]] = (
@@ -473,6 +474,22 @@ def center_at_sdc(
             episode["map/dir"][..., :2][episode["map/valid"]], to_sdc_so2
         )
     )
+
+    # route
+    episode["route/pos"][..., :2][episode["route/valid"]] = (
+        transform_utils.transform_points(
+            episode["route/pos"][..., :2][episode["route/valid"]], to_sdc_se3
+        )
+    )
+    episode["route/dir"][..., :2][episode["route/valid"]] = (
+        transform_utils.transform_points(
+            episode["route/dir"][..., :2][episode["route/valid"]], to_sdc_so2
+        )
+    )
+    episode["route/goal"][:2] = transform_utils.transform_points(
+        episode["route/goal"][..., :2].reshape(1, -1), to_sdc_se3
+    ).reshape(-1)
+    episode["route/goal"][2] += to_sdc_yaw
 
     for pf in prefix:
         # agent: pos, vel, yaw_bbox
