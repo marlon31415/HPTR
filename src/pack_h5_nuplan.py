@@ -68,7 +68,7 @@ AGENT_TYPES = {
 }
 N_AGENT_TYPE = len(set(AGENT_TYPES.values()))
 
-N_PL_MAX = 2000
+N_PL_MAX = 2500
 N_TL_MAX = 40
 N_AGENT_MAX = 800
 N_PL_ROUTE_MAX = 250
@@ -114,7 +114,7 @@ LAYER_NAMES = [
     SemanticMapLayer.CARPARK_AREA,
     SemanticMapLayer.ROADBLOCK,
     SemanticMapLayer.ROADBLOCK_CONNECTOR,
-    # unsupported yet
+    # unsupported yet (as of 12/2024)
     # SemanticMapLayer.PUDO,
     # SemanticMapLayer.EXTENDED_PUDO,
     # SemanticMapLayer.SPEED_BUMP,
@@ -157,7 +157,7 @@ def collate_agent_features(
             "heading": np.zeros(shape=(n_step,)),
             "velocity_x": np.zeros(shape=(n_step,)),
             "velocity_y": np.zeros(shape=(n_step,)),
-            "valid": np.zeros(shape=(n_step,)),
+            "valid": np.zeros(shape=(n_step,), dtype=int),
         },
         "metadata": {
             "object_id": None,  # itegers defined by the dataset
@@ -188,6 +188,7 @@ def collate_agent_features(
     # adapt ego velocity
     calc_velocity_from_positions(tracks["ego"]["state"], interval_length)
 
+    # TODO: Currently only the most interesting agent is selected for interaction challenge
     track_ids_predict, track_ids_interact = mining_for_interesting_agents(
         tracks, n_agent_pred_challenge, n_agent_interact_challange
     )
@@ -762,10 +763,12 @@ def main():
 
     out_path = Path(args.out_dir)
     out_path.mkdir(exist_ok=True)
-    if not args.mini:
-        out_h5_path = out_path / (args.dataset + ".h5")
-    else:
+    if args.test:
+        out_h5_path = out_path / (args.dataset + "_test" + ".h5")
+    elif args.mini:
         out_h5_path = out_path / (args.dataset + "_mini" + ".h5")
+    else:
+        out_h5_path = out_path / (args.dataset + ".h5")
 
     if args.test:
         data_root = os.path.join(args.data_dir, "nuplan-v1.1/splits/mini")

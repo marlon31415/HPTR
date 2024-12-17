@@ -508,14 +508,10 @@ def calculate_interest_score(track: dict) -> float:
         - Total acceleration
         - Progress
     """
-    position_x = track["state"]["position_x"]
-    position_y = track["state"]["position_y"]
-    heading = track["state"]["heading"]
-
-    # Delete all invalid values (=0)
-    position_x = position_x[position_x != 0]
-    position_y = position_y[position_y != 0]
-    heading = heading[heading != 0]
+    valid = track["state"]["valid"]
+    position_x = track["state"]["position_x"][valid]
+    position_y = track["state"]["position_y"][valid]
+    heading = track["state"]["heading"][valid]
 
     # 1. Compute Euclidean distance traveled
     dx = np.diff(position_x)
