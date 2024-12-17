@@ -28,6 +28,8 @@ from src.utils.pack_h5_nuplan_utils import (
     fill_track_with_state,
     calc_velocity_from_positions,
     mining_for_interesting_agents,
+    create_rectangle_from_points,
+    is_point_in_rectangle,
 )
 from nuplan.planning.scenario_builder.nuplan_db.nuplan_scenario import NuPlanScenario
 from nuplan.common.maps.maps_datatypes import (
@@ -348,7 +350,7 @@ def collate_route_features(
 ):
     scenario_center_tuple = [scenario_center.x, scenario_center.y]
 
-    # id=-1 is the default nuplan value for the ego; TODO: change this if needed
+    # id=-1 is the default nuplan value for the ego
     sdc_id = [-1]
     sdc_route_type = []
     sdc_route_lane_id = []
@@ -368,15 +370,41 @@ def collate_route_features(
     sdc_route_type.append(pl_types)
     sdc_route_xyz.append(route_lane_polylines)
 
-    mission_goal_centered_with_yaw = np.hstack(
-        [
-            nuplan_to_centered_vector(
-                [mission_goal.x, mission_goal.y], scenario_center_tuple
-            ),
-            [mission_goal.heading],
-        ]
-    )
-    sdc_route_goal.append(mission_goal_centered_with_yaw)
+    # Extract goal pose: [x, y, yaw]
+    # For some reason, the roadblocks defined in route_roadblock_ids are not always within the query radius
+    # -> check if route polylines where extracted: if yes 1), if not 2)
+    route_polylines_within_query_radius = len(sdc_route_xyz[0]) > 0
+    # 1) Use last route polyline position as goal
+    # Problem: last polyline in list might not be the last one in the route
+    # -> use rectangle around all polylines and choose polyline of which the
+    #    last point + vector in direction of last point is outside of rectangle
+    if route_polylines_within_query_radius:
+        points = sdc_route_xyz[0][0]  # sdc_route_xyz dim 0 is always 1
+        for pl in sdc_route_xyz[0]:
+            points = np.vstack([points, pl])
+        rectangle_bounds = create_rectangle_from_points(np.array(points)[:, :2])
+        for pl in sdc_route_xyz[0][::-1]:
+            if len(pl) > 1:
+                route_goal_xy = pl[-1][:2]
+                route_goal_dir = route_goal_xy - pl[-2][:2]
+                translated_goal_point = route_goal_xy + 10 * route_goal_dir
+            else:
+                continue
+            if not is_point_in_rectangle(translated_goal_point, rectangle_bounds):
+                break
+        route_goal_yaw = np.arctan2(route_goal_dir[1], route_goal_dir[0])
+        route_goal_centered_with_yaw = np.hstack([route_goal_xy, route_goal_yaw])
+    # 2) Use mission goal (mostly far outside of extracted map)
+    else:
+        route_goal_centered_with_yaw = np.hstack(
+            [
+                nuplan_to_centered_vector(
+                    [mission_goal.x, mission_goal.y], scenario_center_tuple
+                ),
+                [mission_goal.heading],
+            ]
+        )
+    sdc_route_goal.append(route_goal_centered_with_yaw)
 
     return (
         sdc_id,
