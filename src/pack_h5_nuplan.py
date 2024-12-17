@@ -8,12 +8,9 @@ from tqdm import tqdm
 import h5py
 import numpy as np
 from pathlib import Path
-import geopandas as gpd
-from shapely.ops import unary_union
 import multiprocessing as mp
 from functools import partial
 from more_itertools import batched
-from tqdm import tqdm
 
 sys.path.append(".")
 
@@ -273,7 +270,6 @@ def collate_map_features(map_api, scenario_center, radius=200):
         scenario_center, radius, LAYER_NAMES
     )
 
-    block_polygons = []
     for semantic_layer in [
         SemanticMapLayer.ROADBLOCK,
         SemanticMapLayer.ROADBLOCK_CONNECTOR,
@@ -286,9 +282,6 @@ def collate_map_features(map_api, scenario_center, radius=200):
         boundary of right most lane) as BOUNDARIES.
         """
         for block in semantic_map_layers[semantic_layer]:
-            # Save roadblock polygons for extracting intersections
-            if semantic_layer == SemanticMapLayer.ROADBLOCK:
-                block_polygons.append(block.polygon)
             # LANE centerlines from lanes in ROADBLOCKS and ROADBLOCK_CONNECTORS
             # According to the map attributes, lanes are numbered left to right with smaller indices being on the
             # left and larger indices being on the right.
@@ -333,6 +326,7 @@ def collate_map_features(map_api, scenario_center, radius=200):
         SemanticMapLayer.CROSSWALK,
         SemanticMapLayer.STOP_LINE,
         SemanticMapLayer.CARPARK_AREA,
+        SemanticMapLayer.INTERSECTION,
     ]:
         """
         These semantic layers are represented as polygons in the map.
@@ -345,23 +339,6 @@ def collate_map_features(map_api, scenario_center, radius=200):
             mf_id.append(int(area.id))
             mf_type.append(PL_TYPES[semantic_layer.name])
             mf_xyz.append(mock_2d_to_3d_points(polygon_centered)[::4])
-
-    # INTERSECTION
-    interpolygons = [
-        intersection.polygon
-        for intersection in semantic_map_layers[SemanticMapLayer.INTERSECTION]
-    ]
-    boundaries = gpd.GeoSeries(
-        unary_union(interpolygons + block_polygons)
-    ).boundary.explode(index_parts=True)
-    for idx, boundary in enumerate(boundaries[0]):
-        polygons = np.array(
-            list(i for i in zip(boundary.coords.xy[0], boundary.coords.xy[1]))
-        )
-        polygons_centered = nuplan_to_centered_vector(polygons, scenario_center_tuple)
-        mf_id.append(idx)
-        mf_type.append(PL_TYPES["INTERSECTION"])
-        mf_xyz.append(mock_2d_to_3d_points(polygons_centered)[::4])
 
     return mf_id, mf_xyz, mf_type, mf_edge
 
