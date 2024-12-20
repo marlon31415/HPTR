@@ -188,9 +188,14 @@ def collate_agent_features(
     # adapt ego velocity
     calc_velocity_from_positions(tracks["ego"]["state"], interval_length)
 
-    # TODO: Currently only the most interesting agent is selected for interaction challenge
+    # Mining for interesting agents:
+    # Use just agents valid at the current step (because of model architecture)
+    tracks_for_mining = {}
+    for track_token, track in tracks.items():
+        if track["state"]["valid"][STEP_CURRENT] == 1:
+            tracks_for_mining[track_token] = copy.deepcopy(track)
     track_ids_predict, track_ids_interact = mining_for_interesting_agents(
-        tracks, n_agent_pred_challenge, n_agent_interact_challange
+        tracks_for_mining, n_agent_pred_challenge, n_agent_interact_challange
     )
 
     for nuplan_id, track in tracks.items():
