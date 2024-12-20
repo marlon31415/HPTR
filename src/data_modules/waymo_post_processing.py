@@ -40,7 +40,7 @@ class WaymoPostProcessing(nn.Module):
             pred_valid: [n_scene, n_agent]
             pred_conf: [n_decoder, n_scene, n_agent, n_pred], not normalized!
             pred_pos: [n_decoder, n_scene, n_agent, n_pred, n_step_future, 2] in local coordinate (x,y, yaw...)
-            pred_yaw: [n_decoder, n_scene, n_agent, n_pred, n_step_future, 1] in local coordinate
+            pred_yaw_bbox: [n_decoder, n_scene, n_agent, n_pred, n_step_future, 1] in local coordinate
             ref_type: [n_scene, n_agent, 3]
             ref_pos: [n_scene, n_agent, 1, 2]
             ref_rot: [n_scene, n_agent, 2, 2]

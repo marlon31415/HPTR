@@ -1,18 +1,9 @@
 # Licensed under the CC BY-NC 4.0 license (https://creativecommons.org/licenses/by-nc/4.0/)
 
-import sys
 import os
 import copy
-from argparse import ArgumentParser
-from tqdm import tqdm
 import h5py
 import numpy as np
-from pathlib import Path
-import multiprocessing as mp
-from functools import partial
-from more_itertools import batched
-
-sys.path.append(".")
 
 import utils.pack_h5 as pack_utils
 from utils.pack_h5_nuplan_utils import (
@@ -852,5 +843,12 @@ def main():
 
 
 if __name__ == "__main__":
+    from argparse import ArgumentParser
+    from tqdm import tqdm
+    from pathlib import Path
+    import multiprocessing as mp
+    from functools import partial
+    from more_itertools import batched
+
     SCENARIO_QUEUE = mp.Manager().Queue()
     main()
