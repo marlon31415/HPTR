@@ -14,8 +14,8 @@ from more_itertools import batched
 
 sys.path.append(".")
 
-import src.utils.pack_h5 as pack_utils
-from src.utils.pack_h5_nuplan_utils import (
+import utils.pack_h5 as pack_utils
+from utils.pack_h5_nuplan_utils import (
     get_nuplan_scenarios,
     nuplan_to_centered_vector,
     parse_object_state,

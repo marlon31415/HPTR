@@ -2,13 +2,14 @@
 import logging
 import os
 import math
+import hydra
 import tempfile
+import numpy as np
 from dataclasses import dataclass
 from os.path import join
 from typing import Union, List, Set
 
-import numpy as np
-
+import nuplan
 from nuplan.common.maps.abstract_map import AbstractMap
 from nuplan.common.maps.nuplan_map.utils import (
     get_distance_between_map_object_and_point,
@@ -16,30 +17,20 @@ from nuplan.common.maps.nuplan_map.utils import (
 from nuplan.planning.training.preprocessing.feature_builders.vector_builder_utils import (
     prune_route_by_connectivity,
 )
+from nuplan.common.actor_state.state_representation import Point2D
+from nuplan.common.maps.maps_datatypes import SemanticMapLayer
+from nuplan.planning.script.builders.scenario_building_builder import (
+    build_scenario_builder,
+)
+from nuplan.planning.script.builders.scenario_filter_builder import (
+    build_scenario_filter,
+)
+from nuplan.planning.script.utils import set_up_common_builder
+
+NUPLAN_PACKAGE_PATH = os.path.dirname(nuplan.__file__)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-try:
-    from nuplan.common.actor_state.agent import Agent
-    from nuplan.common.actor_state.static_object import StaticObject
-    from nuplan.common.actor_state.state_representation import Point2D
-    from nuplan.common.maps.maps_datatypes import SemanticMapLayer, StopLineType
-
-    import hydra
-    from nuplan.planning.script.builders.scenario_building_builder import (
-        build_scenario_builder,
-    )
-    from nuplan.planning.script.builders.scenario_filter_builder import (
-        build_scenario_filter,
-    )
-    from nuplan.planning.script.utils import set_up_common_builder
-    from nuplan.common.actor_state.tracked_objects_types import TrackedObjectType
-    import nuplan
-
-    NUPLAN_PACKAGE_PATH = os.path.dirname(nuplan.__file__)
-except ImportError as e:
-    raise RuntimeError(e)
 
 
 def get_nuplan_scenarios(
