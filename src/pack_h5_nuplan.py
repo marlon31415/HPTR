@@ -657,7 +657,7 @@ def convert_nuplan_scenario(
             f"scenario {scenario.log_name} has no map! map boundary is: {episode_reduced['map/boundary']}"
         )
 
-    episode_name = os.path.splitext(scenario.token)[0] + "_" + str(iteration)
+    episode_name = scenario.token + "_" + str(iteration)
     episode_metadata = {
         "scenario_id": episode_name,
         "scenario_center": scenario_center,
@@ -717,6 +717,7 @@ def wrapper_convert_nuplan_scenario(
 
 def write_to_h5_file(h5_file_path, queue, total_items):
     with h5py.File(h5_file_path, "w") as h5_file:
+        h5_file.attrs["data_len"] = total_items
         for _ in range(total_items):
             data, metadata = queue.get()
             # Create a group for each item
