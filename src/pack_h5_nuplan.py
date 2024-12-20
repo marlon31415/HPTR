@@ -809,17 +809,6 @@ def main():
     n_agent_no_sim_max = 0
     n_route_pl_max = 0
 
-    convert_func = partial(
-        wrapper_convert_nuplan_scenario,
-        rand_pos=args.rand_pos,
-        rand_yaw=args.rand_yaw,
-        pack_all=pack_all,
-        pack_history=pack_history,
-        dest_no_pred=args.dest_no_pred,
-        radius=args.radius,
-        split=args.dataset,
-    )
-
     # Start the writer thread
     writer_thread = mp.Process(
         target=write_to_h5_file,
@@ -829,7 +818,19 @@ def main():
     # Mulitprocessing the data conversion
     for batch in tqdm(list(batched(scenario_tuples, args.batch_size))):
         with mp.Pool(args.num_workers) as pool:
-            res = pool.map(convert_func, batch)
+            res = pool.map(
+                partial(
+                    wrapper_convert_nuplan_scenario,
+                    rand_pos=args.rand_pos,
+                    rand_yaw=args.rand_yaw,
+                    pack_all=pack_all,
+                    pack_history=pack_history,
+                    dest_no_pred=args.dest_no_pred,
+                    radius=args.radius,
+                    split=args.dataset,
+                ),
+                batch,
+            )
 
         res_reordered_zip = zip(*res)
         res_reordered = list(res_reordered_zip)
