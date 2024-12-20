@@ -369,21 +369,19 @@ def get_route_lane_polylines_from_roadblock_ids(
     return route_lane_polylines, map_objects_id
 
 
-def get_id_and_start_idx_for_scenarios(scenarios, n_step):
+def get_scenario_start_iter_tuple(scenario, n_step):
+    """
+    Sample subscenarios from the scenario based on the desired new length (n_step).
+    Start at the beginning (t=0) and go to the end in 1 sec steps until
+    the desired length reaches the end of the scenario.
+    """
     scenario_id_start_idx_tuples = []
-    id = 0
-    for scenario in scenarios:
-        scenario_len_sec = int(scenario.duration_s.time_s)
-        # episode_len_iter = scenario.get_number_of_iterations()
-        scenario_time_step = scenario.database_interval
-        assert scenario_time_step == 0.1, "Only support 0.1s time step"
-        for iteration in range(
-            0,
-            int((scenario_len_sec - 1) / scenario_time_step) - (n_step - 1),
-            10,
-        ):
-            scenario_id_start_idx_tuples.append((scenario, iteration, id))
-            id += 1
+    scenario_len_sec = int(scenario.duration_s.time_s)
+    scenario_time_step = scenario.database_interval
+    assert scenario_time_step == 0.1, "Only support 0.1s time step"
+    last_iteration = int((scenario_len_sec - 1) / scenario_time_step) - (n_step - 1)
+    for iteration in range(0, last_iteration, 10):
+        scenario_id_start_idx_tuples.append((scenario, iteration))
     return scenario_id_start_idx_tuples
 
 

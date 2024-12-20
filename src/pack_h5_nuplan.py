@@ -24,7 +24,7 @@ from src.utils.pack_h5_nuplan_utils import (
     extract_centerline,
     mock_2d_to_3d_points,
     get_route_lane_polylines_from_roadblock_ids,
-    get_id_and_start_idx_for_scenarios,
+    get_scenario_start_iter_tuple,
     fill_track_with_state,
     calc_velocity_from_positions,
     mining_for_interesting_agents,
@@ -740,8 +740,8 @@ def main():
     parser.add_argument("--dest-no-pred", action="store_true")
     parser.add_argument("--radius", default=200, type=int)
     parser.add_argument("--test", action="store_true", help="for test use only. convert one log")
-    parser.add_argument("--num-workers", default=32, type=int)
-    parser.add_argument("--batch-size", default=128, type=int)
+    parser.add_argument("--num-workers", default=64, type=int)
+    parser.add_argument("--batch-size", default=1024, type=int)
     args = parser.parse_args()
     # fmt: on
 
@@ -780,8 +780,18 @@ def main():
         scenarios = get_nuplan_scenarios(data_root, args.map_dir)
     print(f"Found {len(scenarios)} nuplan scenarios in the dataset")
 
-    # preprocessing: convert scnearios list to list of tuples (scenario, start_iter)
-    scenario_tuples = get_id_and_start_idx_for_scenarios(scenarios, N_STEP)
+    # Preprocessing: convert scenarios list to list of tuples: [(scenario, start_iter, id), ...]
+    # Use mulitprocessing, due to huge amount of scenarios in dataset
+    # Scenario ID as integer for compatibility with dataloader!
+    id = 0
+    scenario_tuples = []
+    for batch in tqdm(list(batched(scenarios, 1024))):
+        with mp.Pool(128) as pool:
+            res = pool.map(partial(get_scenario_start_iter_tuple, n_step=N_STEP), batch)
+            for list_with_tuples in res:
+                for scenario_start_iter_tuple in list_with_tuples:
+                    scenario_tuples.append((*scenario_start_iter_tuple, id))
+                    id += 1
     print(
         f"Converting {len(scenario_tuples)} subsampled scenarios to {args.dataset} dataset"
     )
