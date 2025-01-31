@@ -89,7 +89,7 @@ def get_nuplan_scenarios(
     # Compose the configuration
     overrides = [
         f"group={save_dir}",
-        "worker=sequential",
+        "worker=ray_distributed",  # sequential
         f"ego_controller={ego_controller}",
         f"observation={observation}",
         f"hydra.searchpath=[{simulation_hydra_paths.common_dir}, {simulation_hydra_paths.experiment_dir}]",
@@ -209,9 +209,11 @@ def get_points_from_boundary(boundary, center, resampling=False, sample_distance
 
 
 def mock_2d_to_3d_points(points):
+    if len(points) == 0:
+        return []
     # Convert input to numpy array
     points = np.array(points)
-    # If points is a 1D array, reshape it to 2D
+    # If points is a 1D array (single point), reshape it to 2D
     if points.ndim == 1:
         points = points.reshape(1, -1)
     # Add a third coordinate (z=0) to each point
@@ -351,7 +353,7 @@ def get_route_lane_polylines_from_roadblock_ids(
     for map_obj in map_objects:
         # print(f"centerline length: {map_obj.baseline_path.length}")
         # print(f"centerline points: {len(map_obj.baseline_path.discrete_path)}")
-        map_objects_id.append(map_obj.id)
+        map_objects_id.append(int(map_obj.id))
         baseline_path_polyline = [
             [node.x, node.y] for node in map_obj.baseline_path.discrete_path
         ]
@@ -403,33 +405,6 @@ def calc_velocity_from_positions(track_state: dict, dt: float) -> None:
     track_state["velocity_x"][-1] = track_state["velocity_x"][-2]
     track_state["velocity_y"][:-1] = velocity[..., 1]
     track_state["velocity_y"][-1] = track_state["velocity_y"][-2]
-
-
-def get_max_distance_for_challenges(
-    dists_to_ego: list,
-    n_agent_pred_challenge: int,
-    n_agent_interact_challange: int,
-) -> tuple:
-    """
-    Get the distance to the ego for the prediction and interaction challenges
-    :param dists_to_ego: list of distances to the ego
-    :return:
-        predict_dist: distance to the ego for vehicles to be considered in the prediction challenge
-        interest_dist: distance to the ego for vehicles to be considered in the interaction challenge
-    """
-    # dists_to_ego includes the ego vehicle (distance 0)
-    dists_to_ego.sort()
-    predict_dist = (
-        dists_to_ego[n_agent_pred_challenge - 1]
-        if len(dists_to_ego) >= n_agent_pred_challenge
-        else dists_to_ego[-1]
-    )
-    interest_dist = (
-        dists_to_ego[n_agent_interact_challange - 1]
-        if len(dists_to_ego) >= n_agent_interact_challange
-        else dists_to_ego[-1]
-    )
-    return predict_dist, interest_dist
 
 
 def mining_for_interesting_agents(
