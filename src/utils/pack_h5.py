@@ -136,6 +136,7 @@ def pack_episode_map(
     mf_xyz: List[List[List[float]]],
     mf_type: List[int],
     mf_edge: List[List[int]],
+    mf_on_route: List[bool],
     n_pl_max: int,
     n_nodes: int = 20,
 ) -> int:
@@ -152,6 +153,7 @@ def pack_episode_map(
     episode["map/pos"] = np.zeros([n_pl_max, n_nodes, 3], dtype=np.float32)
     episode["map/dir"] = np.zeros([n_pl_max, n_nodes, 3], dtype=np.float32)
     episode["map/edge"] = np.array(mf_edge)
+    episode["map/on_route"] = np.zeros([n_pl_max], dtype=bool)
 
     pl_counter = 0
     for i_pl in range(len(mf_id)):
@@ -179,6 +181,7 @@ def pack_episode_map(
             ]
             episode["map/type"][pl_counter] = mf_type[i_pl]
             episode["map/id"][pl_counter] = mf_id[i_pl]
+            episode["map/on_route"][pl_counter] = mf_on_route[i_pl]
             pl_counter += 1
     return pl_counter
 
@@ -762,6 +765,7 @@ def repack_episode_map(
         "map/type": [N_PL_MAX],  # int, >= 0
         "map/pos": [N_PL_MAX, 20, 3]
         "map/dir": [N_PL_MAX, 20, 3]
+        "map/on_route": [N_PL_MAX],  # bool
     """
     n_pl_nodes = episode["map/valid"].shape[1]
     episode_reduced["map/valid"] = np.zeros([n_pl, n_pl_nodes], dtype=bool)  # bool
@@ -773,6 +777,7 @@ def repack_episode_map(
         [n_pl, n_pl_nodes, 2], dtype=np.float32
     )  # x,y
     episode_reduced["map/id"] = np.zeros([n_pl], dtype=np.int64) - 1
+    episode_reduced["map/on_route"] = np.zeros([n_pl], dtype=bool)
 
     map_valid_mask = episode["map/valid"].any(1)
     n_pl_valid = map_valid_mask.sum()
@@ -781,6 +786,9 @@ def repack_episode_map(
     episode_reduced["map/pos"][:n_pl_valid] = episode["map/pos"][map_valid_mask, :, :2]
     episode_reduced["map/dir"][:n_pl_valid] = episode["map/dir"][map_valid_mask, :, :2]
     episode_reduced["map/id"][:n_pl_valid] = episode["map/id"][map_valid_mask]
+    episode_reduced["map/on_route"][:n_pl_valid] = episode["map/on_route"][
+        map_valid_mask
+    ]
     # one_hot "map/type": [N_PL, N_PL_TYPE], bool
     episode_reduced["map/type"] = np.eye(n_pl_type, dtype=bool)[
         episode_reduced["map/type"]

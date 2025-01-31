@@ -503,6 +503,7 @@ def convert_nuplan_scenario(
             radius,
         )
     )
+    mf_on_route = [id in set(sdc_route_id) for id in mf_id]
 
     episode = {}
     n_pl = pack_utils.pack_episode_map(
@@ -511,6 +512,7 @@ def convert_nuplan_scenario(
         mf_xyz=mf_xyz,
         mf_type=mf_type,
         mf_edge=mf_edge,
+        mf_on_route=mf_on_route,
         n_pl_max=N_PL_MAX,
     )
     n_tl = pack_utils.pack_episode_traffic_lights(
