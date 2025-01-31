@@ -146,6 +146,7 @@ class DataH5nuplan(LightningDataModule):
             "route/type": (n_pl_route, n_pl_type),  # bool one_hot
             "route/pos": (n_pl_route, n_pl_node, 2),  # float32
             "route/dir": (n_pl_route, n_pl_node, 2),  # float32
+            "route/goal": (3,),  # float32: [x, y, theta]
         }
 
         self.tensor_size_test = {
@@ -240,11 +241,6 @@ class DataH5nuplan(LightningDataModule):
                 n_agent_no_sim,
                 3,
             ),  # float32: [length, width, height]
-            # route
-            "route/valid": (n_pl_route, n_pl_node),  # bool
-            "route/type": (n_pl_route, n_pl_type),  # bool one_hot
-            "route/pos": (n_pl_route, n_pl_node, 2),  # float32
-            "route/dir": (n_pl_route, n_pl_node, 2),  # float32
         }
 
         self.tensor_size_val = (

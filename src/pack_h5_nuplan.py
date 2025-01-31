@@ -357,30 +357,24 @@ def collate_route_features(
     polylines, route_lane_ids = get_route_lane_polylines_from_roadblock_ids(
         map_api, scenario_center, radius, route_roadblock_ids
     )
-    route_lane_polylines = []
-    pl_types = []
+    sdc_route_lane_id.extend(route_lane_ids)
     for polyline in polylines:
         polyline_centered = nuplan_to_centered_vector(polyline, scenario_center_tuple)
-        route_lane_polylines.append(mock_2d_to_3d_points(polyline_centered)[::10])
-        pl_types.append(PL_TYPES["ROUTE"])
-    sdc_route_lane_id.append(route_lane_ids)
-    sdc_route_type.append(pl_types)
-    sdc_route_xyz.append(route_lane_polylines)
+        sdc_route_xyz.append(mock_2d_to_3d_points(polyline_centered)[::10])
+        sdc_route_type.append(PL_TYPES["ROUTE"])
 
     # Extract goal pose: [x, y, yaw]
     # For some reason, the roadblocks defined in route_roadblock_ids are not always within the query radius
     # -> check if route polylines where extracted: if yes 1), if not 2)
-    route_polylines_within_query_radius = len(sdc_route_xyz[0]) > 0
+    route_polylines_within_query_radius = len(sdc_route_xyz) > 0
     # 1) Use last route polyline position as goal
     # Problem: last polyline in list might not be the last one in the route
     # -> use rectangle around all polylines and choose polyline of which the
     #    last point + vector in direction of last point is outside of rectangle
     if route_polylines_within_query_radius:
-        points = sdc_route_xyz[0][0]  # sdc_route_xyz dim 0 is always 1
-        for pl in sdc_route_xyz[0]:
-            points = np.vstack([points, pl])
+        points = np.vstack(sdc_route_xyz)
         rectangle_bounds = create_rectangle_from_points(np.array(points)[:, :2])
-        for pl in sdc_route_xyz[0][::-1]:
+        for pl in sdc_route_xyz[::-1]:
             if len(pl) > 1:
                 route_goal_xy = pl[-1][:2]
                 route_goal_dir = route_goal_xy - pl[-2][:2]

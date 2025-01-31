@@ -366,9 +366,9 @@ def pack_episode_traffic_lights(
 def pack_episode_route(
     episode: Dict[str, np.ndarray],
     sdc_id: List[int],
-    sdc_route_id: List[List[int]],
-    sdc_route_type: List[List[int]],
-    sdc_route_xyz: List[List[List[float]]],
+    sdc_route_id: List[int],
+    sdc_route_type: List[int],
+    sdc_route_xyz: List[List[float]],
     sdc_route_goal: List[np.ndarray],
     n_route_pl_max: int,
     n_nodes: int = 20,
@@ -376,8 +376,8 @@ def pack_episode_route(
     """
     Args:
         sdc_id: [n_sdc]; n_sdc = 1
-        sdc_route_id: [n_sdc, n_lanes_route, ]
-        sdc_route_xyz: [n_sdc, n_lanes_route, xyz]
+        sdc_route_id: [n_lanes_route]
+        sdc_route_xyz: [n_lanes_route, xyz]
         sdc_route_goal: np.array([x,y,heading])
     """
     episode["route/valid"] = np.zeros([n_route_pl_max, n_nodes], dtype=bool)
@@ -386,12 +386,6 @@ def pack_episode_route(
     episode["route/dir"] = np.zeros([n_route_pl_max, n_nodes, 3], dtype=np.float32)
     episode["route/type"] = np.zeros([n_route_pl_max], dtype=np.int64)
     episode["route/goal"] = np.zeros([3], dtype=np.float32)
-
-    sdc_id = sdc_id[0]
-    sdc_route_id = sdc_route_id[0]
-    sdc_route_type = sdc_route_type[0]
-    sdc_route_xyz = sdc_route_xyz[0]
-    sdc_route_goal = sdc_route_goal[0]
 
     pl_counter = 0
     for i_pl in range(len(sdc_route_id)):
@@ -420,7 +414,7 @@ def pack_episode_route(
             episode["route/type"][pl_counter] = sdc_route_type[i_pl]
             episode["route/id"][pl_counter] = sdc_route_id[i_pl]
             pl_counter += 1
-    episode["route/goal"] = sdc_route_goal
+    episode["route/goal"] = sdc_route_goal[0]
     return pl_counter
 
 
