@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import h5py
 
-from src.pack_h5_nuplan import (
+from utils.nuplan.constants import (
     N_PL_TYPE,
     N_STEP,
     STEP_CURRENT,

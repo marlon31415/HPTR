@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 
 import utils.pack_h5 as pack_utils
-from utils.pack_h5_nuplan_utils import (
+from utils.nuplan.pack_h5_nuplan_utils import (
     get_nuplan_scenarios,
     nuplan_to_centered_vector,
     parse_object_state,
@@ -23,9 +23,7 @@ from utils.pack_h5_nuplan_utils import (
     is_point_in_rectangle,
 )
 from nuplan.planning.scenario_builder.nuplan_db.nuplan_scenario import NuPlanScenario
-from nuplan.common.maps.maps_datatypes import (
-    SemanticMapLayer,
-)
+from nuplan.common.maps.maps_datatypes import SemanticMapLayer
 from nuplan.planning.simulation.planner.abstract_planner import (
     PlannerInitialization,
     PlannerInput,
@@ -37,63 +35,7 @@ from nuplan.planning.simulation.observation.observation_type import DetectionsTr
 from nuplan.planning.simulation.simulation_time_controller.simulation_iteration import (
     SimulationIteration,
 )
-
-
-TL_TYPES = {
-    "GREEN": 3,
-    "YELLOW": 2,
-    "RED": 1,
-    "UNKNOWN": 0,
-}
-N_TL_STATE = len(TL_TYPES)
-
-AGENT_TYPES = {
-    "VEHICLE": 0,  # Includes all four or more wheeled vehicles, as well as trailers.
-    "PEDESTRIAN": 1,  # All types of pedestrians, incl. strollers and wheelchairs.
-    "BICYCLE": 2,  # Includes bicycles, motorcycles and tricycles.
-    "TRAFFIC_CONE": 3,  # Cones that are temporarily placed to control the flow of traffic.
-    "BARRIER": 3,  # Solid barriers that can be either temporary or permanent.
-    "CZONE_SIGN": 3,  # Temporary signs that indicate construction zones.
-    "GENERIC_OBJECT": 3,  # Animals, debris, pushable/pullable objects, permanent poles.
-    "EGO": 0,  # The ego vehicle.
-}
-N_AGENT_TYPE = len(set(AGENT_TYPES.values()))
-
-N_PL_MAX = 2500
-N_TL_MAX = 40
-N_AGENT_MAX = 800
-N_PL_ROUTE_MAX = 250
-
-N_PL = 1024
-N_TL = 200  # due to polyline splitting this value can be higher than N_TL_MAX
-N_AGENT = 64
-N_AGENT_NO_SIM = N_AGENT_MAX - N_AGENT
-N_PL_ROUTE = N_PL_ROUTE_MAX
-
-THRESH_MAP = 120
-THRESH_AGENT = 120
-
-N_STEP = 91
-STEP_CURRENT = 10
-
-N_SDC_AGENT = 1
-N_AGENT_PRED_CHALLENGE = 8
-N_AGENT_INTERACT_CHALLENGE = 2
-
-PL_TYPES = {
-    "INTERSECTION": 0,
-    "STOP_LINE": 1,
-    "CROSSWALK": 2,
-    "WALKWAYS": 3,
-    "BOUNDARIES": 4,
-    "CARPARK_AREA": 5,
-    "CENTERLINE": 6,
-    "ROUTE": 7,
-}
-N_PL_TYPE = len(PL_TYPES)
-DIM_VEH_LANES = [7]
-DIM_CYC_LANES = [4, 7]
-DIM_PED_LANES = [2, 3, 4]
+from utils.nuplan.constants import *
 
 LAYER_NAMES = [
     SemanticMapLayer.LANE_CONNECTOR,
@@ -819,8 +761,7 @@ def main():
                 batch,
             )
 
-        res_reordered_zip = zip(*res)
-        res_reordered = list(res_reordered_zip)
+        res_reordered = list(zip(*res))
         n_pl_max = max(n_pl_max, max(res_reordered[2]))
         n_tl_max = max(n_tl_max, max(res_reordered[3]))
         n_agent_max = max(n_agent_max, max(res_reordered[4]))
