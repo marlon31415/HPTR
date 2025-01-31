@@ -140,6 +140,8 @@ class AgentCentricGlobal(nn.Module):
                 "ac/route_type": [n_scene, n_target, n_route, 11], bool one_hot
                 "ac/route_pos": [n_scene, n_target, n_route, n_pl_node, 2], float32
                 "ac/route_dir": [n_scene, n_target, n_route, n_pl_node, 2], float32
+                "ac/route_goal": [n_scene, n_target, 2], float32
+                "ac/route_goal_valid": [n_scene, n_target], bool
 
 
         Returns: add following keys to batch Dict
@@ -164,6 +166,9 @@ class AgentCentricGlobal(nn.Module):
                     "input/map_attr": [n_scene, n_target, n_map, n_pl_node, map_attr_dim]
                     "input/route_valid": [n_scene, n_target, n_route, n_pl_node], bool
                     "input/route_attr": [n_scene, n_target, n_route, n_pl_node, route_attr_dim]
+            # route goal
+            "input/route_goal_valid": [n_scene, n_target], bool
+            "input/route_goal_attr": [n_scene, n_target, 2]
             # traffic lights: stop point, cannot be aggregated, detections are not tracked, singular node polyline.
                 if use_current_tl:
                     "input/tl_valid": [n_scene, n_target, 1, n_tl], bool
@@ -179,6 +184,9 @@ class AgentCentricGlobal(nn.Module):
         batch["input/tl_valid"] = batch["ac/tl_valid"] & valid  # [n_scene, n_target, n_step_hist, n_tl]
         batch["input/map_valid"] = batch["ac/map_valid"] & valid  # [n_scene, n_target, n_map, n_pl_node]
         batch["input/route_valid"] = batch["ac/route_valid"] & valid  # [n_scene, n_target, n_route, n_pl_node]
+        batch["input/route_goal_valid"] = batch["ac/route_goal_valid"] # [n_scene, n_target]
+
+        batch["input/route_goal_attr"] = batch["ac/route_goal"]
 
         # ! randomly mask history target/other/tl
         if self.training and (0 < self.dropout_p_history <= 1.0):

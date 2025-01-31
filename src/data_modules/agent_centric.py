@@ -3,7 +3,7 @@ from typing import Dict
 from omegaconf import DictConfig
 import torch
 from torch import nn, Tensor
-from ..utils.transform_utils import torch_rad2rot, torch_pos2local, torch_dir2local, torch_rad2local
+from utils.transform_utils import torch_rad2rot, torch_pos2local, torch_dir2local, torch_rad2local
 
 
 class AgentCentricPreProcessing(nn.Module):
@@ -59,6 +59,7 @@ class AgentCentricPreProcessing(nn.Module):
                 "route/type": (n_scene, n_pl_route, 11),  # bool one_hot
                 "route/pos": (n_scene, n_pl_route, n_pl_node, 2),  # float32
                 "route/dir": (n_scene, n_pl_route, n_pl_node, 2),  # float32
+                "route/goal": (n_scene, 3)
 
         Returns: agent-centric Dict, masked according to valid
             # (ref) reference information for transform back to global coordinate and submission to waymo
@@ -77,6 +78,8 @@ class AgentCentricPreProcessing(nn.Module):
                 "gt/cmd": [n_scene, n_target, 8]
                 "gt/route_valid": [n_scene, n_target, n_pl_route, n_pl_node]
                 "gt/route_pos": [n_scene, n_target, n_pl_route, n_pl_node, 2]
+                "gt/route_goal": [n_scene, n_target, 2]
+                "gt/route_goal_valid": [n_scene, n_target]
             # (ac) agent-centric target agents states
                 "ac/target_valid": [n_scene, n_target, n_step_hist]
                 "ac/target_pos": [n_scene, n_target, n_step_hist, 2]
@@ -116,6 +119,8 @@ class AgentCentricPreProcessing(nn.Module):
                 "ac/route_type": [n_scene, n_target, n_route, 11], one_hot
                 "ac/route_pos": [n_scene, n_target, n_route, n_pl_node, 2], float32
                 "ac/route_dir": [n_scene, n_target, n_route, n_pl_node, 2], float32
+                "ac/route_goal": [n_scene, n_target, 2]
+                "ac/route_goal_valid": [n_scene, n_target]
         """
         prefix = "" if self.training else "history/"
         n_scene = batch[prefix + "agent/valid"].shape[0]
@@ -279,6 +284,12 @@ class AgentCentricPreProcessing(nn.Module):
         # [n_scene, n_target, n_route, n_pl_node, 2]
         batch["ac/route_pos"] = torch_pos2local(batch["ac/route_pos"], ref_pos.unsqueeze(2), ref_rot.unsqueeze(2))
         batch["ac/route_dir"] = torch_dir2local(batch["ac/route_dir"], ref_rot.unsqueeze(2))
+
+        batch["ac/route_goal"] = batch["route/goal"].unsqueeze(1).repeat(1, self.n_target, 1).unsqueeze(2).unsqueeze(3)
+        batch["ac/route_goal_valid"] = batch["ref/role"][:, :, 0] # invalid if not sdc
+        batch["ac/route_goal"] = torch_pos2local(batch["ac/route_goal"][..., :2].float(), ref_pos.unsqueeze(2), ref_rot.unsqueeze(2)).squeeze(2).squeeze(2)
+        batch["gt/route_goal"] = batch["ac/route_goal"]
+        batch["gt/route_goal_valid"] = batch["ac/route_goal_valid"]
 
         # ! prepare agent-centric traffic lights
         # [n_scene, n_step_hist, n_tl_stop, 2], [n_scene, n_target, 1, 2]
