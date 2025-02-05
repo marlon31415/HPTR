@@ -133,7 +133,7 @@ class DataH5nuplan(LightningDataModule):
             "map/pos": (n_pl, n_pl_node, 2),  # float32
             "map/dir": (n_pl, n_pl_node, 2),  # float32
             "map/boundary": (4,),  # xmin, xmax, ymin, ymax
-            "map/on_route": (n_pl),  # bool
+            "map/on_route": (n_pl,),  # bool
             # traffic lights
             "tl_lane/valid": (n_step, n_tl),  # bool
             "tl_lane/state": (n_step, n_tl, n_tl_state),  # bool one_hot
@@ -198,7 +198,7 @@ class DataH5nuplan(LightningDataModule):
             "map/pos": (n_pl, n_pl_node, 2),  # float32
             "map/dir": (n_pl, n_pl_node, 2),  # float32
             "map/boundary": (4,),  # xmin, xmax, ymin, ymax
-            "map/on_route": (n_pl),  # bool
+            "map/on_route": (n_pl,),  # bool
             # traffic_light
             "history/tl_lane/valid": (n_step_history, n_tl),  # bool
             "history/tl_lane/state": (n_step_history, n_tl, n_tl_state),  # bool one_hot

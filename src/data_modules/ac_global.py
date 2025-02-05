@@ -17,6 +17,8 @@ class AgentCentricGlobal(nn.Module):
         pl_aggr: bool,
         pl_aggr_route: bool,
         pose_pe: DictConfig,
+        use_ego_nav: bool,
+        nav_with_route: bool,
     ) -> None:
         super().__init__()
         self.dropout_p_history = dropout_p_history  # [0, 1], turn off if set to negative
@@ -27,6 +29,8 @@ class AgentCentricGlobal(nn.Module):
         self.pl_aggr = pl_aggr
         self.pl_aggr_route = pl_aggr_route
         self.n_pl_node = data_size["map/valid"][-1]
+        self.use_ego_nav = use_ego_nav
+        self.nav_with_route = nav_with_route
 
         self.pose_pe_agent = PosePE(pose_pe["agent"])
         self.pose_pe_map = PosePE(pose_pe["map"])
@@ -57,6 +61,8 @@ class AgentCentricGlobal(nn.Module):
                 + data_size["agent/type"][-1]  # 3
             )
             map_attr_dim = self.pose_pe_map.out_dim + data_size["map/type"][-1]
+        if self.use_ego_nav and self.nav_with_route:
+            map_attr_dim += 3 # pl on route (on_route, not_on_route, unknown)
         if self.pl_aggr_route:
             route_attr_dim = self.pose_pe_route.out_dim * self.n_pl_node + data_size["route/type"][-1] + self.n_pl_node
         else:
@@ -130,6 +136,7 @@ class AgentCentricGlobal(nn.Module):
                 "ac/map_type": [n_scene, n_target, n_map, 11], bool one_hot
                 "ac/map_pos": [n_scene, n_target, n_map, n_pl_node, 2], float32
                 "ac/map_dir": [n_scene, n_target, n_map, n_pl_node, 2], float32
+                "ac/map_on_route": [n_scene, n_target, n_map, 3], float32
             # traffic lights
                 "ac/tl_valid": [n_scene, n_target, n_step_hist, n_tl], bool
                 "ac/tl_state": [n_scene, n_target, n_step_hist, n_tl, 5], bool one_hot
@@ -292,6 +299,23 @@ class AgentCentricGlobal(nn.Module):
                 ],
                 dim=-1,
             )
+        if self.use_ego_nav and self.nav_with_route:
+            if self.pl_aggr:
+                batch["input/map_attr"] = torch.cat(
+                    [
+                        batch["input/map_attr"],
+                        batch["ac/map_on_route"],  # on route
+                    ],
+                    dim=-1,
+                )
+            else:
+                batch["input/map_attr"] = torch.cat(
+                    [
+                        batch["input/map_attr"],
+                        batch["ac/map_on_route"].unsqueeze(-2).expand(-1, -1, -1, self.n_pl_node, -1), # on route
+                    ],
+                    dim=-1,
+                )
 
         # ! prepare "input/route_attr": [n_scene, n_target, n_route, n_pl_node, map_attr_dim]
         if self.pl_aggr_route:  # [n_scene, n_target, n_map, map_attr_dim]

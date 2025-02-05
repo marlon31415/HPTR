@@ -49,6 +49,7 @@ class AgentCentricPreProcessing(nn.Module):
                 "map/type": [n_scene, n_pl, 11], bool one_hot
                 "map/pos": [n_scene, n_pl, n_pl_node, 2], float32
                 "map/dir": [n_scene, n_pl, n_pl_node, 2], float32
+                "map/on_route": [n_scene, n_pl], bool
             # traffic lights
                 "tl_stop/valid": [n_scene, n_step, n_tl_stop], bool
                 "tl_stop/state": [n_scene, n_step, n_tl_stop, 5], bool one_hot
@@ -80,6 +81,9 @@ class AgentCentricPreProcessing(nn.Module):
                 "gt/route_pos": [n_scene, n_target, n_pl_route, n_pl_node, 2]
                 "gt/route_goal": [n_scene, n_target, 2]
                 "gt/route_goal_valid": [n_scene, n_target]
+                "gt/map_on_route": [n_scene, n_target, n_map, 3]
+                "gt/map_valid": [n_scene, n_target, n_map, n_pl_node]
+                "gt/map_pos": [n_scene, n_target, n_map, n_pl_node, 2]
             # (ac) agent-centric target agents states
                 "ac/target_valid": [n_scene, n_target, n_step_hist]
                 "ac/target_pos": [n_scene, n_target, n_step_hist, 2]
@@ -109,6 +113,7 @@ class AgentCentricPreProcessing(nn.Module):
                 "ac/map_type": [n_scene, n_target, n_map, 11], bool one_hot
                 "ac/map_pos": [n_scene, n_target, n_map, n_pl_node, 2], float32
                 "ac/map_dir": [n_scene, n_target, n_map, n_pl_node, 2], float32
+                "ac/map_on_route": [n_scene, n_target, n_map, 3], float32
             # traffic lights
                 "ac/tl_valid": [n_scene, n_target, n_step_hist, n_tl], bool
                 "ac/tl_state": [n_scene, n_target, n_step_hist, n_tl, 5], bool one_hot
@@ -252,6 +257,26 @@ class AgentCentricPreProcessing(nn.Module):
         # [n_scene, n_target, n_map, n_pl_node, 2]
         batch["ac/map_pos"] = torch_pos2local(batch["ac/map_pos"], ref_pos.unsqueeze(2), ref_rot.unsqueeze(2))
         batch["ac/map_dir"] = torch_dir2local(batch["ac/map_dir"], ref_rot.unsqueeze(2))
+
+        batch["gt/map_valid"] = batch["ac/map_valid"]
+        batch["gt/map_pos"] = batch["ac/map_pos"]
+
+        # [n_scene, n_pl] -> [n_scene, n_target, n_map], bool
+        ac_map_on_route = (
+                batch["map/on_route"]
+                .unsqueeze(1)
+                .repeat(1, self.n_target, 1)[other_scene_indices, other_target_indices, map_indices]
+        )
+        # [n_scene, n_target, n_map] -> [n_scene, n_target, n_map, 3], float
+        # on_route [1,0,0] and not_on_route [0,1,0] for ego navigation and unknown [0,0,1] for other target agents
+        device = batch["ref/role"].device
+        map_on_route = torch.zeros([n_scene, self.n_target, self.n_map, 3], dtype=torch.float32, device=device)
+        ego_mask = batch["ref/role"][..., 0].unsqueeze(-1).expand(-1, -1, self.n_map)
+        map_on_route[ego_mask & ac_map_on_route] = torch.tensor([1, 0, 0], dtype=torch.float32, device=device)
+        map_on_route[ego_mask & (~ac_map_on_route)] = torch.tensor([0, 1, 0], dtype=torch.float32, device=device)
+        map_on_route[~ego_mask] = torch.tensor([0, 0, 1], dtype=torch.float32, device=device)
+        batch["ac/map_on_route"] = map_on_route        
+        batch["gt/map_on_route"] = batch["ac/map_on_route"]
 
         # ! prepare agent-centric route
         # [n_scene, n_pl_route, n_pl_node, 2], [n_scene, n_target, 1, 2]
